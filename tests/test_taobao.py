@@ -1,0 +1,133 @@
+import unittest
+
+import numpy as np
+
+from babanongchang.handle import OcrText
+from babanongchang.taobao import (
+    TaobaoAutomation,
+    find_available_taobao_search_task,
+    find_taobao_farm_entry,
+    find_taobao_fertilizer_entry,
+    find_taobao_recommended_keyword,
+    find_taobao_task_action,
+    is_taobao_farm_page,
+    is_taobao_fertilizer_tasks_page,
+    is_taobao_recommended_video_page,
+    is_taobao_search_reward_page,
+    is_taobao_search_results_page,
+)
+
+
+def item(text: str, x: int, y: int, score: float = 0.99) -> OcrText:
+    box = np.array([[x - 10, y - 5], [x + 10, y - 5], [x + 10, y + 5], [x - 10, y + 5]])
+    return OcrText(text=text, score=score, box=box)
+
+
+class FakeAdb:
+    def __init__(self) -> None:
+        self.started_activities: list[str] = []
+
+    def start_activity(self, component: str) -> None:
+        self.started_activities.append(component)
+
+
+class TestableTaobaoAutomation(TaobaoAutomation):
+    def __init__(self, adb: FakeAdb) -> None:
+        self.adb = adb  # type: ignore[assignment]
+        self.entered_fertilizer_tasks = False
+        self.completed_supported_tasks = False
+
+    def ensure_fertilizer_tasks_page(self, timeout: float = 60) -> None:
+        self.adb.start_activity(self.HOME_ACTIVITY)
+        self.entered_fertilizer_tasks = True
+
+    def complete_supported_tasks(self) -> None:
+        self.completed_supported_tasks = True
+
+
+class TaobaoAutomationTest(unittest.TestCase):
+    def test_starts_home_activity_and_runs_complete_flow(self) -> None:
+        adb = FakeAdb()
+        automation = TestableTaobaoAutomation(adb)
+
+        automation.run()
+
+        self.assertEqual(
+            adb.started_activities,
+            ["com.taobao.taobao/com.taobao.tao.welcome.Welcome"],
+        )
+        self.assertTrue(automation.entered_fertilizer_tasks)
+        self.assertTrue(automation.completed_supported_tasks)
+
+
+class TaobaoPageTest(unittest.TestCase):
+    def test_finds_farm_entry(self) -> None:
+        entry = item("芭芭农场", 75, 431)
+        self.assertIs(find_taobao_farm_entry([entry]), entry)
+
+    def test_recognizes_farm_page(self) -> None:
+        items = [item("芭芭农场 | 免费领水果", 270, 93), item("施肥", 360, 1154)]
+        self.assertTrue(is_taobao_farm_page(items))
+
+    def test_does_not_treat_home_entry_as_farm_page(self) -> None:
+        self.assertFalse(is_taobao_farm_page([item("芭芭农场", 75, 431)]))
+
+    def test_finds_fertilizer_entry(self) -> None:
+        entry = item("集肥料", 539, 1205)
+        self.assertIs(find_taobao_fertilizer_entry([entry]), entry)
+
+    def test_recognizes_fertilizer_tasks_page(self) -> None:
+        items = [item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345)]
+        self.assertTrue(is_taobao_fertilizer_tasks_page(items))
+
+    def test_finds_search_task_action_on_same_row(self) -> None:
+        target = item("去完成", 614, 591)
+        other = item("去完成", 614, 719)
+        items = [item("搜一搜你喜欢的商品(0/6)", 306, 570), target, other]
+        self.assertIs(
+            find_taobao_task_action(items, (1600, 720, 3), "搜一搜你喜欢的商品"),
+            target,
+        )
+
+    def test_prefers_available_favorite_products_task(self) -> None:
+        favorite = item("去完成", 614, 591)
+        desired = item("去完成", 614, 976)
+        items = [
+            item("搜一搜你喜欢的商品(1/6)", 306, 570),
+            favorite,
+            item("搜一搜你心仪的宝贝(0/5)", 306, 957),
+            desired,
+        ]
+        self.assertEqual(
+            find_available_taobao_search_task(items, (1600, 720, 3)),
+            ("搜一搜你喜欢的商品", favorite),
+        )
+
+    def test_uses_desired_products_when_favorite_is_unavailable(self) -> None:
+        desired = item("去完成", 614, 976)
+        items = [item("搜一搜你心仪的宝贝(0/5)", 306, 957), desired]
+        self.assertEqual(
+            find_available_taobao_search_task(items, (1600, 720, 3)),
+            ("搜一搜你心仪的宝贝", desired),
+        )
+
+    def test_recognizes_search_reward_page(self) -> None:
+        items = [item("搜索有福利", 125, 99), item("搜索后浏览立得奖励", 572, 95)]
+        self.assertTrue(is_taobao_search_reward_page(items))
+
+    def test_finds_first_recommended_keyword(self) -> None:
+        keyword = item("iphone18", 192, 678)
+        items = [
+            item("搜索发现", 80, 601),
+            keyword,
+            item("近一个月点击超10万", 215, 718),
+        ]
+        self.assertIs(find_taobao_recommended_keyword(items), keyword)
+
+    def test_recognizes_search_results_page(self) -> None:
+        items = [item("搜索有福利", 136, 101), item("滑动浏览得肥料", 520, 100)]
+        self.assertTrue(is_taobao_search_results_page(items))
+
+    def test_recognizes_recommended_product_video_page(self) -> None:
+        items = [item("滑动浏览得", 646, 1007), item("肥料", 646, 1030)]
+        self.assertTrue(is_taobao_recommended_video_page(items))

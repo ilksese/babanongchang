@@ -1,35 +1,26 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import re
 import subprocess
 import time
-from dataclasses import dataclass
 from typing import Sequence
 
 import cv2
 import numpy as np
-from rapidocr import RapidOCR
 
 from babanongchang.browsing import swipe_browse
+from babanongchang.handle import (
+    AutomationError,
+    OcrText,
+    RelativeRegion,
+    ScreenSnapshot,
+    TextHandle,
+    WaitTimeoutError,
+    normalize_text,
+)
 from babanongchang.task_executors import TASK_EXECUTORS
 from babanongchang.task_pool import TASK_POOL, TaskDefinition, TaskOperation
-
-
-class AutomationError(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class OcrText:
-    text: str
-    score: float
-    box: np.ndarray
-
-    @property
-    def center(self) -> tuple[int, int]:
-        return int(self.box[:, 0].mean()), int(self.box[:, 1].mean())
 
 
 def parse_fertilizer(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> int | None:
@@ -41,7 +32,7 @@ def parse_fertilizer(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> 
         x, y = item.center
         if not (0.2 * width < x < 0.8 * width and 0.55 * height < y < 0.85 * height):
             continue
-        normalized = re.sub(r"\s+", "", item.text)
+        normalized = normalize_text(item.text)
         match = re.search(r"肥料[：:]?(\d+)$", normalized)
         if match:
             candidates.append((item.score, int(match.group(1))))
@@ -70,17 +61,17 @@ def parse_fertilizer(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> 
 
 def find_goods_entry(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> OcrText | None:
     """查找首页左上方的“逛农货/百县百品”，避开中间的同名横幅。"""
-    height, width = image_shape[:2]
-    matches = []
-    for item in items:
-        x, y = item.center
-        text = item.text.replace(" ", "").strip()
-        if (
-            ("逛农货" in text or "百县百品" in text)
-            and x < 0.22 * width
-            and 0.12 * height < y < 0.35 * height
-        ):
-            matches.append(item)
+    region = RelativeRegion(left=0, top=0.12, right=0.22, bottom=0.35)
+    matches = [
+        item
+        for target in ("逛农货", "百县百品")
+        for item in TextHandle.find_texts(
+            items,
+            target,
+            region=region,
+            image_shape=image_shape,
+        )
+    ]
     return max(matches, key=lambda item: item.score, default=None)
 
 
@@ -89,22 +80,19 @@ TASK_DIALOG_TITLES = ("做任务集肥料", "做任务领肥料")
 
 def has_task_dialog(items: Sequence[OcrText]) -> bool:
     return any(
-        any(title in item.text.replace(" ", "") for title in TASK_DIALOG_TITLES)
+        any(normalize_text(title) in item.normalized_text for title in TASK_DIALOG_TITLES)
         for item in items
     )
 
 
 def find_fertilizer_entry(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> OcrText | None:
     """查找首页右下方的“领肥料”，避开页面中其他领取文案。"""
-    height, width = image_shape[:2]
-    matches = [
-        item
-        for item in items
-        if "领肥料" in item.text.replace(" ", "")
-        and item.center[0] > 0.55 * width
-        and item.center[1] > 0.55 * height
-    ]
-    return max(matches, key=lambda item: item.score, default=None)
+    return TextHandle.find_text(
+        items,
+        "领肥料",
+        region=RelativeRegion(left=0.55, top=0.55),
+        image_shape=image_shape,
+    )
 
 
 def find_task_action(
@@ -114,26 +102,14 @@ def find_task_action(
     actions: str | Sequence[str] | None = None,
 ) -> OcrText | None:
     """返回目标任务同一行右侧的操作按钮，避免点击其他任务的同名按钮。"""
-    height, width = image_shape[:2]
-    titles = [item for item in items if task.matches(item.text)]
     action_names = task.action_labels if actions is None else actions
-    action_names = (action_names,) if isinstance(action_names, str) else action_names
-    actions = [
-        item
-        for item in items
-        if any(name in item.text.replace(" ", "") for name in action_names)
-        and item.center[0] > 0.55 * width
-    ]
-    pairs = [
-        (title, button)
-        for title in titles
-        for button in actions
-        if button.center[0] > title.center[0]
-        and abs(button.center[1] - title.center[1]) < 0.06 * height
-    ]
-    if not pairs:
-        return None
-    return max(pairs, key=lambda pair: pair[0].score + pair[1].score)[1]
+    return TextHandle.find_same_row_text(
+        items,
+        image_shape,
+        anchor_matcher=lambda item: task.matches(item.text),
+        target_texts=action_names,
+        target_region=RelativeRegion(left=0.55),
+    )
 
 
 def describe_recognized_tasks(
@@ -216,77 +192,69 @@ class Adb:
     def back(self) -> None:
         self._run("shell", "input", "keyevent", "KEYCODE_BACK")
 
+    def launch_package(self, package: str) -> None:
+        self._run(
+            "shell",
+            "monkey",
+            "-p",
+            package,
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "1",
+        )
+
+    def start_activity(self, component: str) -> None:
+        self._run(
+            "shell",
+            "am",
+            "start",
+            "-W",
+            "-a",
+            "android.intent.action.MAIN",
+            "-c",
+            "android.intent.category.LAUNCHER",
+            "-f",
+            "0x04000000",
+            "-n",
+            component,
+        )
+
     def allow_screen_sleep(self) -> None:
         self._run("shell", "svc", "power", "stayon", "false")
 
 
-class FarmAutomation:
+class FarmAutomation(TextHandle):
     def __init__(self, adb: Adb, threshold: int = 600, browse_seconds: float = 18) -> None:
-        logging.getLogger("RapidOCR").setLevel(logging.WARNING)
-        self.adb = adb
+        super().__init__(adb)
         self.threshold = threshold
         self.browse_seconds = browse_seconds
-        self.ocr = RapidOCR()
-
-    def scan(self) -> tuple[np.ndarray, list[OcrText]]:
-        image = self.adb.screenshot()
-        result = self.ocr(image)
-        if result.txts is None or result.boxes is None or result.scores is None:
-            return image, []
-        items = [
-            OcrText(text=text, score=float(score), box=np.asarray(box))
-            for text, score, box in zip(result.txts, result.scores, result.boxes)
-            if float(score) >= 0.75
-        ]
-        return image, items
-
-    @staticmethod
-    def find_text(items: Sequence[OcrText], target: str, exact: bool = False) -> OcrText | None:
-        matches = [
-            item
-            for item in items
-            if (item.text.strip() == target if exact else target in item.text.replace(" ", ""))
-        ]
-        return max(matches, key=lambda item: item.score, default=None)
-
-    def wait_for_text(self, target: str, timeout: float = 12, exact: bool = False) -> OcrText:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            _, items = self.scan()
-            found = self.find_text(items, target, exact=exact)
-            if found is not None:
-                return found
-            time.sleep(0.6)
-        raise AutomationError(f"等待“{target}”超时，已停止以避免误点")
 
     def wait_for_farm(self, timeout: float = 15) -> tuple[int, OcrText]:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            image, items = self.scan()
-            balance = parse_fertilizer(items, image.shape)
-            fertilize = self.find_text(items, "施肥", exact=True)
+        def match(snapshot: ScreenSnapshot) -> tuple[int, OcrText] | None:
+            balance = parse_fertilizer(snapshot.items, snapshot.shape)
+            fertilize = self.find_text(snapshot.items, "施肥", exact=True)
             if balance is not None and fertilize is not None:
                 return balance, fertilize
-            time.sleep(0.6)
-        raise AutomationError("未识别到施肥页面的“施肥”和肥料余额，已停止以避免误点")
+            return None
+
+        return self.wait_for_screen(
+            match,
+            timeout=int(timeout * 1000),
+            interval=600,
+            error="未识别到施肥页面的“施肥”和肥料余额，已停止以避免误点",
+        )
 
     def maybe_claim_reward(self) -> bool:
         # 点击施肥后的动画约需一秒；短轮询可避免漏掉领取入口。
-        deadline = time.monotonic() + 5
-        claim_entry: OcrText | None = None
-        while time.monotonic() < deadline:
-            _, items = self.scan()
-            claim_entry = self.find_text(items, "立即领肥")
-            if claim_entry is not None:
-                break
-            time.sleep(0.5)
-        if claim_entry is None:
+        try:
+            claim_point = self.wait_for_text("立即领肥", timeout=5000)
+        except WaitTimeoutError:
             return False
+        assert isinstance(claim_point, tuple)
 
         print("发现“立即领肥”，开始领取浏览奖励")
-        self.adb.tap(claim_entry.center)
-        claim = self.wait_for_text("立即领取")
-        self.adb.tap(claim.center)
+        self.adb.tap(claim_point)
+        self.click_text("立即领取")
 
         browse = self.wait_for_browse_or_farm()
         if browse is None:
@@ -294,7 +262,7 @@ class FarmAutomation:
             return True
 
         self.adb.tap(browse.center)
-        self.wait_for_text("浏览或查看商品领肥料", timeout=20)
+        self.wait_for_text("浏览或查看商品领肥料", timeout=20000)
         self.browse_for_reward()
 
         self.adb.back()
@@ -304,19 +272,24 @@ class FarmAutomation:
 
     def wait_for_browse_or_farm(self, timeout: float = 12) -> OcrText | None:
         """等待领取结果；返回按钮，或在已回到农场时返回 None。"""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            image, items = self.scan()
-            browse = self.find_text(items, "逛一逛")
+        def match(snapshot: ScreenSnapshot) -> tuple[bool, OcrText | None] | None:
+            browse = self.find_text(snapshot.items, "逛一逛")
             if browse is not None:
-                return browse
+                return True, browse
 
-            balance = parse_fertilizer(items, image.shape)
-            fertilize = self.find_text(items, "施肥", exact=True)
+            balance = parse_fertilizer(snapshot.items, snapshot.shape)
+            fertilize = self.find_text(snapshot.items, "施肥", exact=True)
             if balance is not None and fertilize is not None:
-                return None
-            time.sleep(0.6)
-        raise AutomationError("领取后既未出现“逛一逛”，也未返回施肥页")
+                return True, None
+            return None
+
+        _, browse = self.wait_for_screen(
+            match,
+            timeout=int(timeout * 1000),
+            interval=600,
+            error="领取后既未出现“逛一逛”，也未返回施肥页",
+        )
+        return browse
 
     def browse_for_reward(self, duration_seconds: float | None = None) -> None:
         swipe_browse(
@@ -349,31 +322,26 @@ class GoodsAutomation(FarmAutomation):
         super().__init__(adb, browse_seconds=browse_seconds)
 
     def wait_for_home_entry(self, timeout: float = 15) -> OcrText:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            image, items = self.scan()
-            entry = find_goods_entry(items, image.shape)
-            if entry is not None:
-                return entry
-            time.sleep(0.6)
-        raise AutomationError("未识别到首页的“逛农货/百县百品”入口")
+        return self.wait_for_screen(
+            lambda snapshot: find_goods_entry(snapshot.items, snapshot.shape),
+            timeout=int(timeout * 1000),
+            interval=600,
+            error="未识别到首页的“逛农货/百县百品”入口",
+        )
 
     def wait_for_goods_page(self, timeout: float = 15) -> None:
         """确认首页控件消失且二级页内容已稳定出现，避免在过渡帧中开始计时。"""
-        deadline = time.monotonic() + timeout
-        stable_scans = 0
-        while time.monotonic() < deadline:
-            image, items = self.scan()
-            entry = find_goods_entry(items, image.shape)
-            fertilize = self.find_text(items, "施肥", exact=True)
-            if entry is None and fertilize is None and len(items) >= 3:
-                stable_scans += 1
-                if stable_scans >= 2:
-                    return
-            else:
-                stable_scans = 0
-            time.sleep(0.5)
-        raise AutomationError("点击入口后未确认进入“逛农货/百县百品”二级页面")
+        self.wait_for_stable_screen(
+            lambda snapshot: (
+                find_goods_entry(snapshot.items, snapshot.shape) is None
+                and self.find_text(snapshot.items, "施肥", exact=True) is None
+                and len(snapshot.items) >= 3
+            ),
+            stable_scans=2,
+            timeout=int(timeout * 1000),
+            interval=500,
+            error="点击入口后未确认进入“逛农货/百县百品”二级页面",
+        )
 
     def run(self) -> None:
         entry = self.wait_for_home_entry()
@@ -396,42 +364,34 @@ class TaskAutomation(FarmAutomation):
 
     def wait_for_task_dialog(self, timeout: float = 15) -> None:
         """等待弹窗内容连续两次被识别，避开弹出动画。"""
-        deadline = time.monotonic() + timeout
-        stable_scans = 0
-        while time.monotonic() < deadline:
-            _, items = self.scan()
-            if has_task_dialog(items):
-                stable_scans += 1
-                if stable_scans >= 2:
-                    return
-            else:
-                stable_scans = 0
-            time.sleep(0.5)
-        raise AutomationError("等待“做任务领肥料”弹窗超时")
+        self.wait_for_stable_screen(
+            lambda snapshot: has_task_dialog(snapshot.items),
+            stable_scans=2,
+            timeout=int(timeout * 1000),
+            interval=500,
+            error="等待“做任务领肥料”弹窗超时",
+        )
 
     def wait_for_task_list_stable(self, timeout: float = 20) -> None:
         """等待返回后的任务列表连续两帧内容一致，再继续识别。"""
-        deadline = time.monotonic() + timeout
-        previous_signature: tuple[str, ...] | None = None
-        while time.monotonic() < deadline:
-            _, items = self.scan()
-            has_dialog = has_task_dialog(items)
-            signature = self.task_list_signature(items)
-            if has_dialog and signature == previous_signature:
-                return
-            previous_signature = signature if has_dialog else None
-            time.sleep(0.6)
-        raise AutomationError("任务列表刷新后未能稳定，已停止以避免误点")
+        self.wait_for_stable_screen(
+            lambda snapshot: has_task_dialog(snapshot.items),
+            stable_scans=2,
+            signature=lambda snapshot: self.task_list_signature(snapshot.items),
+            timeout=int(timeout * 1000),
+            interval=600,
+            error="任务列表刷新后未能稳定，已停止以避免误点",
+        )
 
     def open_task_dialog(self) -> None:
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            image, items = self.scan()
-            if has_task_dialog(items):
+            snapshot = self.scan()
+            if has_task_dialog(snapshot.items):
                 self.wait_for_task_list_stable()
                 print("检测到已在“做任务集肥料”任务列表")
                 return
-            entry = find_fertilizer_entry(items, image.shape)
+            entry = find_fertilizer_entry(snapshot.items, snapshot.shape)
             if entry is not None:
                 self.adb.tap(entry.center)
                 self.wait_for_task_dialog()
@@ -463,7 +423,7 @@ class TaskAutomation(FarmAutomation):
 
     @staticmethod
     def scan_signature(items: Sequence[OcrText]) -> tuple[str, ...]:
-        return tuple(sorted(item.text.replace(" ", "") for item in items if item.text.strip()))
+        return TextHandle.screen_signature(items)
 
     @staticmethod
     def task_list_signature(items: Sequence[OcrText]) -> tuple[str, ...]:
@@ -475,7 +435,7 @@ class TaskAutomation(FarmAutomation):
         }
         texts = []
         for item in items:
-            normalized = item.text.replace(" ", "")
+            normalized = item.normalized_text
             if any(task.matches(item.text) for task in TASK_POOL) or any(
                 label in normalized for label in action_labels
             ):
@@ -489,10 +449,10 @@ class TaskAutomation(FarmAutomation):
         max_scrolls: int = 10,
     ) -> tuple[TaskDefinition, OcrText] | None:
         """优先检查当前屏幕，找不到时再从列表顶部完整查找。"""
-        image, items = self.scan()
-        self.log_recognized_tasks(items, image.shape)
+        snapshot = self.scan()
+        self.log_recognized_tasks(snapshot.items, snapshot.shape)
         for task in tasks:
-            button = find_task_action(items, image.shape, task, actions)
+            button = find_task_action(snapshot.items, snapshot.shape, task, actions)
             if button is not None:
                 return task, button
 
@@ -500,21 +460,22 @@ class TaskAutomation(FarmAutomation):
         previous_signature: tuple[str, ...] | None = None
         unchanged_count = 0
         for page in range(max_scrolls + 1):
-            image, items = self.scan()
-            self.log_recognized_tasks(items, image.shape, page=page + 1)
+            snapshot = self.scan()
+            self.log_recognized_tasks(snapshot.items, snapshot.shape, page=page + 1)
             for task in tasks:
-                button = find_task_action(items, image.shape, task, actions)
+                button = find_task_action(
+                    snapshot.items, snapshot.shape, task, actions
+                )
                 if button is not None:
                     return task, button
 
-            signature = self.scan_signature(items)
+            signature = self.scan_signature(snapshot.items)
             unchanged_count = unchanged_count + 1 if signature == previous_signature else 0
             if page == max_scrolls or unchanged_count >= 1:
                 return None
             previous_signature = signature
             self.scroll_task_list()
         return None
-
     @staticmethod
     def log_recognized_tasks(
         items: Sequence[OcrText], image_shape: tuple[int, ...], page: int | None = None
@@ -529,33 +490,29 @@ class TaskAutomation(FarmAutomation):
             print(f"任务识别（{location}）：未命中任务池")
 
     def wait_for_task_target_page(self, timeout: float = 20) -> None:
-        deadline = time.monotonic() + timeout
-        stable_scans = 0
-        while time.monotonic() < deadline:
-            _, items = self.scan()
-            dialog = next(
-                (self.find_text(items, title) for title in TASK_DIALOG_TITLES if self.find_text(items, title)),
-                None,
-            )
-            if dialog is None and len(items) >= 3:
-                stable_scans += 1
-                if stable_scans >= 2:
-                    return
-            else:
-                stable_scans = 0
-            time.sleep(0.5)
-        raise AutomationError("点击任务按钮后未确认进入目标页面")
+        self.wait_for_stable_screen(
+            lambda snapshot: (
+                not any(
+                    self.has_text(snapshot.items, title)
+                    for title in TASK_DIALOG_TITLES
+                )
+                and len(snapshot.items) >= 3
+            ),
+            stable_scans=2,
+            timeout=int(timeout * 1000),
+            interval=500,
+            error="点击任务按钮后未确认进入目标页面",
+        )
 
     def wait_for_task_list_departure(self, timeout: float = 10) -> None:
         """任务弹窗一消失就返回，避免等待期间目标页继续弹出其他窗口。"""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            _, items = self.scan()
-            has_dialog = has_task_dialog(items)
-            if not has_dialog:
-                return
-            time.sleep(0.1)
-        raise AutomationError("点击任务按钮后未离开任务列表")
+        self.wait_for_stable_screen(
+            lambda snapshot: not has_task_dialog(snapshot.items),
+            stable_scans=1,
+            timeout=int(timeout * 1000),
+            interval=100,
+            error="点击任务按钮后未离开任务列表",
+        )
 
     def claim_reward(self, task: TaskDefinition) -> None:
         if task.operation is TaskOperation.CLICK_AND_RETURN:
@@ -564,8 +521,10 @@ class TaskAutomation(FarmAutomation):
                 raise AutomationError(f"返回任务列表后未找到“{task.name}”的领取按钮")
             button = found[1]
         else:
-            image, items = self.scan()
-            button = find_task_action(items, image.shape, task, "领取")
+            snapshot = self.scan()
+            button = find_task_action(
+                snapshot.items, snapshot.shape, task, "领取"
+            )
         if button is None:
             print(f"“{task.name}”已自动发放奖励或刷新，无需点击领取")
             return
@@ -593,8 +552,7 @@ class TaskAutomation(FarmAutomation):
         self.wait_for_task_target_page()
 
     def read_task_page_texts(self) -> Sequence[str]:
-        _, items = self.scan()
-        return [item.text for item in items]
+        return self.scan().texts
 
     def run_swipe_browse(self, duration_seconds: float) -> None:
         self.browse_for_reward(duration_seconds)
@@ -618,9 +576,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "module",
         nargs="?",
-        choices=("fertilize", "goods", "tasks"),
+        choices=("fertilize", "goods", "tasks", "taobao"),
         default="fertilize",
-        help="运行模块：fertilize（施肥，默认）、goods（逛农货/百县百品）或 tasks（做任务领肥料）",
+        help="运行模块：fertilize（施肥，默认）、goods（逛农货/百县百品）、tasks（做任务领肥料）或 taobao（淘宝流程）",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
     parser.add_argument("--threshold", type=int, default=600, help="停止施肥的余额阈值（默认：600）")
@@ -648,6 +606,10 @@ def main() -> None:
             GoodsAutomation(adb, browse_seconds=args.browse_seconds).run()
         elif args.module == "tasks":
             TaskAutomation(adb, browse_seconds=args.browse_seconds).run()
+        elif args.module == "taobao":
+            from babanongchang.taobao import TaobaoAutomation
+
+            TaobaoAutomation(adb).run()
         else:
             FarmAutomation(
                 adb,

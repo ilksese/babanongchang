@@ -1,6 +1,22 @@
 # 支付宝芭芭农场脚本
 
-目前实现三个模块。
+目前实现四个模块。
+
+### 淘宝流程
+
+当前已接入启动淘宝，从首页进入芭芭农场，打开“集肥料”任务列表，执行“搜一搜你喜欢的商品”，并选择推荐关键词在结果列表往复滑动 18 秒：
+
+启动流程会直接打开淘宝主页 Activity `com.taobao.taobao/com.taobao.tao.welcome.Welcome`，再根据 OCR 页面状态逐步进入芭芭农场任务列表；即使设备最初停留在其他应用或淘宝未知页面，也不依赖原有页面栈。
+
+进入农场后会等待页面和“集肥料”入口连续三帧稳定，再执行一次点击。点击期间不会重复触发；如果跳转后未进入任务列表，会返回农场首页、重新等待页面稳定后重试。
+
+浏览结束后会逐次执行返回并识别当前页面，直到确认回到肥料任务列表；超时仍未返回时会安全停止。
+
+每次返回任务列表后都会重新扫描全部已接入任务，而不是将任务分阶段清空。当前按“搜一搜你喜欢的商品”“搜一搜你心仪的宝贝”“看严选推荐商品”的顺序选择本轮可执行任务；搜索任务进入结果列表往复滑动 18 秒，严选推荐商品进入视频页面静止停留 18 秒。只有某一轮扫描中全部已接入任务都没有“去完成”按钮时，才判定今日任务已清空并结束脚本。
+
+```bash
+uv run babanongchang taobao --serial <ADB_SERIAL>
+```
 
 ### 施肥
 
@@ -96,6 +112,31 @@ uv run babanongchang fertilize --max-clicks 1
 运行期间可按 `Ctrl+C` 停止。脚本只在同时识别到余额和“施肥”按钮后点击；关键页面识别超时会停止，不会猜测坐标继续操作。
 
 脚本启动时会主动唤醒设备，并在运行期间通过 ADB 强制保持亮屏；退出时会恢复系统自动休眠。运行前仍需手动解锁手机并打开对应的芭芭农场页面。
+
+公共 OCR 文案操作位于 `src/babanongchang/handle.py` 的 `TextHandle`，`FarmAutomation` 通过继承复用：
+
+- `scan()`：截取当前屏幕并执行 OCR，返回包含图片和文字项的 `ScreenSnapshot`。
+- `find_text()` / `find_texts()` / `has_text()`：查找单项、全部匹配项或判断文案是否存在，支持精确匹配和相对屏幕区域过滤。
+- `find_same_row_text()`：根据标题与按钮的同行布局关系定位操作按钮。
+- `wait_for_screen()`：按项目配置的截图间隔轮询业务页面判定函数。
+- `wait_for_stable_screen()` / `wait_for_stable_text()`：等待页面、页面签名或文字坐标连续多帧稳定。
+- `wait_for_text(text="", timeout=10000)`：等待文案出现，返回文字中心坐标；也可传入文案序列，只有同一屏同时出现全部文案时才按传入顺序返回坐标列表；超时单位为毫秒。
+- `wait_for_all_text()` / `wait_for_any_text()` / `wait_for_text_gone()`：分别等待全部文案、任一文案或文案消失。
+- `click_text(text="", wait=True, timeout=10000)`：等待并点击文案，返回点击坐标；`wait=False` 时只识别当前屏幕一次。
+- `tap_and_wait()` / `click_text_and_wait()`：只点击一次并等待目标页面，等待期间不会重复点击。
+
+通用返回操作位于 `src/babanongchang/navigation.py`：`back_until()` 每次返回后重新识别页面，直到目标页面出现或超时。
+
+项目级配置位于根目录 `babanongchang.toml`，在进程启动时读取：
+
+```toml
+[ocr]
+screenshot_interval_ms = 200
+recognition_timeout_ms = 10000
+```
+
+- `screenshot_interval_ms`：等待 OCR 文案时连续截图的间隔，默认 200 毫秒。
+- `recognition_timeout_ms`：OCR 文案等待的默认超时，默认 10 秒。
 
 扫描任务列表时会逐屏输出命中的任务、操作类型和按钮状态，例如：
 

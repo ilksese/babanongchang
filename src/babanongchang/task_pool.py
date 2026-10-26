@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
+from babanongchang.handle import normalize_text
+
 
 class TaskOperation(Enum):
     SWIPE_BROWSE = "swipe_browse"
@@ -22,9 +24,9 @@ class TaskMatcher:
             re.compile(self.pattern)
 
     def matches(self, text: str) -> bool:
-        normalized = text.replace(" ", "")
+        normalized = normalize_text(text)
         if self.fixed_text is not None:
-            return self.fixed_text.replace(" ", "") in normalized
+            return normalize_text(self.fixed_text) in normalized
         assert self.pattern is not None
         return re.search(self.pattern, normalized) is not None
 
