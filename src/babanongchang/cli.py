@@ -12,6 +12,10 @@ import cv2
 import numpy as np
 from rapidocr import RapidOCR
 
+from babanongchang.browsing import swipe_browse
+from babanongchang.task_executors import TASK_EXECUTORS
+from babanongchang.task_pool import TASK_POOL, TaskDefinition, TaskOperation
+
 
 class AutomationError(RuntimeError):
     pass
@@ -80,10 +84,87 @@ def find_goods_entry(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> 
     return max(matches, key=lambda item: item.score, default=None)
 
 
+TASK_DIALOG_TITLES = ("做任务集肥料", "做任务领肥料")
+
+
+def has_task_dialog(items: Sequence[OcrText]) -> bool:
+    return any(
+        any(title in item.text.replace(" ", "") for title in TASK_DIALOG_TITLES)
+        for item in items
+    )
+
+
+def find_fertilizer_entry(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> OcrText | None:
+    """查找首页右下方的“领肥料”，避开页面中其他领取文案。"""
+    height, width = image_shape[:2]
+    matches = [
+        item
+        for item in items
+        if "领肥料" in item.text.replace(" ", "")
+        and item.center[0] > 0.55 * width
+        and item.center[1] > 0.55 * height
+    ]
+    return max(matches, key=lambda item: item.score, default=None)
+
+
+def find_task_action(
+    items: Sequence[OcrText],
+    image_shape: tuple[int, ...],
+    task: TaskDefinition,
+    actions: str | Sequence[str] | None = None,
+) -> OcrText | None:
+    """返回目标任务同一行右侧的操作按钮，避免点击其他任务的同名按钮。"""
+    height, width = image_shape[:2]
+    titles = [item for item in items if task.matches(item.text)]
+    action_names = task.action_labels if actions is None else actions
+    action_names = (action_names,) if isinstance(action_names, str) else action_names
+    actions = [
+        item
+        for item in items
+        if any(name in item.text.replace(" ", "") for name in action_names)
+        and item.center[0] > 0.55 * width
+    ]
+    pairs = [
+        (title, button)
+        for title in titles
+        for button in actions
+        if button.center[0] > title.center[0]
+        and abs(button.center[1] - title.center[1]) < 0.06 * height
+    ]
+    if not pairs:
+        return None
+    return max(pairs, key=lambda pair: pair[0].score + pair[1].score)[1]
+
+
+def describe_recognized_tasks(
+    items: Sequence[OcrText], image_shape: tuple[int, ...]
+) -> list[str]:
+    """描述当前屏幕中命中任务池的任务及其同行按钮。"""
+    descriptions = []
+    for task in TASK_POOL:
+        titles = [item for item in items if task.matches(item.text)]
+        if not titles:
+            continue
+        title = max(titles, key=lambda item: item.score)
+        button = find_task_action(
+            items,
+            image_shape,
+            task,
+            (*task.action_labels, "领取"),
+        )
+        button_text = button.text.strip() if button is not None else "无可执行按钮"
+        descriptions.append(
+            f"{title.text.strip()} -> {task.operation.value} [{button_text}]"
+        )
+    return descriptions
+
+
 class Adb:
     def __init__(self, serial: str | None = None) -> None:
         self.prefix = ["adb"] + (["-s", serial] if serial else [])
         self._verify_device()
+        self._run("shell", "input", "keyevent", "KEYCODE_WAKEUP")
+        self._run("shell", "svc", "power", "stayon", "true")
 
     def _run(self, *args: str, timeout: float = 30) -> subprocess.CompletedProcess[bytes]:
         try:
@@ -109,6 +190,8 @@ class Adb:
 
     def screenshot(self) -> np.ndarray:
         raw = self._run("exec-out", "screencap", "-p").stdout
+        if not raw:
+            raise AutomationError("设备截图为空，请检查屏幕是否已锁定")
         image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise AutomationError("无法解码设备截图")
@@ -132,6 +215,9 @@ class Adb:
 
     def back(self) -> None:
         self._run("shell", "input", "keyevent", "KEYCODE_BACK")
+
+    def allow_screen_sleep(self) -> None:
+        self._run("shell", "svc", "power", "stayon", "false")
 
 
 class FarmAutomation:
@@ -232,20 +318,11 @@ class FarmAutomation:
             time.sleep(0.6)
         raise AutomationError("领取后既未出现“逛一逛”，也未返回施肥页")
 
-    def browse_for_reward(self) -> None:
-        image = self.adb.screenshot()
-        height, width = image.shape[:2]
-        upper = (width // 2, int(height * 0.36))
-        lower = (width // 2, int(height * 0.74))
-        deadline = time.monotonic() + self.browse_seconds
-        downward = True
-        print(f"开始上下往复滑动 {self.browse_seconds:g} 秒")
-        while time.monotonic() < deadline:
-            start, end = (upper, lower) if downward else (lower, upper)
-            self.adb.swipe(start, end, duration_ms=650)
-            downward = not downward
-            time.sleep(0.2)
-        print("浏览时间已满足，准备返回")
+    def browse_for_reward(self, duration_seconds: float | None = None) -> None:
+        swipe_browse(
+            self.adb,
+            self.browse_seconds if duration_seconds is None else duration_seconds,
+        )
 
     def run(self, max_clicks: int | None = None) -> None:
         clicks = 0
@@ -311,14 +388,239 @@ class GoodsAutomation(FarmAutomation):
         print("已返回芭芭农场首页，本日任务完成")
 
 
+class TaskAutomation(FarmAutomation):
+    """执行“做任务领肥料”弹窗中的指定浏览任务。"""
+
+    def __init__(self, adb: Adb, browse_seconds: float = 18) -> None:
+        super().__init__(adb, browse_seconds=browse_seconds)
+
+    def wait_for_task_dialog(self, timeout: float = 15) -> None:
+        """等待弹窗内容连续两次被识别，避开弹出动画。"""
+        deadline = time.monotonic() + timeout
+        stable_scans = 0
+        while time.monotonic() < deadline:
+            _, items = self.scan()
+            if has_task_dialog(items):
+                stable_scans += 1
+                if stable_scans >= 2:
+                    return
+            else:
+                stable_scans = 0
+            time.sleep(0.5)
+        raise AutomationError("等待“做任务领肥料”弹窗超时")
+
+    def wait_for_task_list_stable(self, timeout: float = 20) -> None:
+        """等待返回后的任务列表连续两帧内容一致，再继续识别。"""
+        deadline = time.monotonic() + timeout
+        previous_signature: tuple[str, ...] | None = None
+        while time.monotonic() < deadline:
+            _, items = self.scan()
+            has_dialog = has_task_dialog(items)
+            signature = self.task_list_signature(items)
+            if has_dialog and signature == previous_signature:
+                return
+            previous_signature = signature if has_dialog else None
+            time.sleep(0.6)
+        raise AutomationError("任务列表刷新后未能稳定，已停止以避免误点")
+
+    def open_task_dialog(self) -> None:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            image, items = self.scan()
+            if has_task_dialog(items):
+                self.wait_for_task_list_stable()
+                print("检测到已在“做任务集肥料”任务列表")
+                return
+            entry = find_fertilizer_entry(items, image.shape)
+            if entry is not None:
+                self.adb.tap(entry.center)
+                self.wait_for_task_dialog()
+                self.wait_for_task_list_stable()
+                print("已打开“做任务领肥料”弹窗")
+                return
+            time.sleep(0.6)
+        raise AutomationError("未识别到屏幕右下方的“领肥料”按钮")
+
+    def scroll_task_list(self, toward_bottom: bool = True) -> None:
+        image = self.adb.screenshot()
+        height, width = image.shape[:2]
+        start_y, end_y = (
+            (int(height * 0.76), int(height * 0.38))
+            if toward_bottom
+            else (int(height * 0.38), int(height * 0.76))
+        )
+        self.adb.swipe(
+            (width // 2, start_y),
+            (width // 2, end_y),
+            duration_ms=650,
+        )
+        time.sleep(0.8)
+
+    def reset_task_list(self) -> None:
+        """回到列表顶部，使每轮查找都覆盖完整任务列表。"""
+        for _ in range(8):
+            self.scroll_task_list(toward_bottom=False)
+
+    @staticmethod
+    def scan_signature(items: Sequence[OcrText]) -> tuple[str, ...]:
+        return tuple(sorted(item.text.replace(" ", "") for item in items if item.text.strip()))
+
+    @staticmethod
+    def task_list_signature(items: Sequence[OcrText]) -> tuple[str, ...]:
+        """仅保留任务标题和操作按钮，排除状态栏、动画等动态文案。"""
+        action_labels = {
+            label
+            for task in TASK_POOL
+            for label in (*task.action_labels, "领取")
+        }
+        texts = []
+        for item in items:
+            normalized = item.text.replace(" ", "")
+            if any(task.matches(item.text) for task in TASK_POOL) or any(
+                label in normalized for label in action_labels
+            ):
+                texts.append(normalized)
+        return tuple(sorted(texts))
+
+    def find_action_in_list(
+        self,
+        tasks: Sequence[TaskDefinition] = TASK_POOL,
+        actions: str | Sequence[str] | None = None,
+        max_scrolls: int = 10,
+    ) -> tuple[TaskDefinition, OcrText] | None:
+        """优先检查当前屏幕，找不到时再从列表顶部完整查找。"""
+        image, items = self.scan()
+        self.log_recognized_tasks(items, image.shape)
+        for task in tasks:
+            button = find_task_action(items, image.shape, task, actions)
+            if button is not None:
+                return task, button
+
+        self.reset_task_list()
+        previous_signature: tuple[str, ...] | None = None
+        unchanged_count = 0
+        for page in range(max_scrolls + 1):
+            image, items = self.scan()
+            self.log_recognized_tasks(items, image.shape, page=page + 1)
+            for task in tasks:
+                button = find_task_action(items, image.shape, task, actions)
+                if button is not None:
+                    return task, button
+
+            signature = self.scan_signature(items)
+            unchanged_count = unchanged_count + 1 if signature == previous_signature else 0
+            if page == max_scrolls or unchanged_count >= 1:
+                return None
+            previous_signature = signature
+            self.scroll_task_list()
+        return None
+
+    @staticmethod
+    def log_recognized_tasks(
+        items: Sequence[OcrText], image_shape: tuple[int, ...], page: int | None = None
+    ) -> None:
+        descriptions = describe_recognized_tasks(items, image_shape)
+        location = f"第 {page} 屏" if page is not None else "当前屏幕"
+        if descriptions:
+            print(f"任务识别（{location}）：")
+            for description in descriptions:
+                print(f"  - {description}")
+        else:
+            print(f"任务识别（{location}）：未命中任务池")
+
+    def wait_for_task_target_page(self, timeout: float = 20) -> None:
+        deadline = time.monotonic() + timeout
+        stable_scans = 0
+        while time.monotonic() < deadline:
+            _, items = self.scan()
+            dialog = next(
+                (self.find_text(items, title) for title in TASK_DIALOG_TITLES if self.find_text(items, title)),
+                None,
+            )
+            if dialog is None and len(items) >= 3:
+                stable_scans += 1
+                if stable_scans >= 2:
+                    return
+            else:
+                stable_scans = 0
+            time.sleep(0.5)
+        raise AutomationError("点击任务按钮后未确认进入目标页面")
+
+    def wait_for_task_list_departure(self, timeout: float = 10) -> None:
+        """任务弹窗一消失就返回，避免等待期间目标页继续弹出其他窗口。"""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            _, items = self.scan()
+            has_dialog = has_task_dialog(items)
+            if not has_dialog:
+                return
+            time.sleep(0.1)
+        raise AutomationError("点击任务按钮后未离开任务列表")
+
+    def claim_reward(self, task: TaskDefinition) -> None:
+        if task.operation is TaskOperation.CLICK_AND_RETURN:
+            found = self.find_action_in_list(tasks=(task,), actions="领取")
+            if found is None:
+                raise AutomationError(f"返回任务列表后未找到“{task.name}”的领取按钮")
+            button = found[1]
+        else:
+            image, items = self.scan()
+            button = find_task_action(items, image.shape, task, "领取")
+        if button is None:
+            print(f"“{task.name}”已自动发放奖励或刷新，无需点击领取")
+            return
+        self.adb.tap(button.center)
+        print(f"已领取“{task.name}”奖励")
+        time.sleep(1.2)
+        self.wait_for_task_dialog()
+        self.wait_for_task_list_stable()
+
+    def execute_task(self, task: TaskDefinition, button: OcrText) -> None:
+        print(f"开始执行“{task.name}”")
+        executor = TASK_EXECUTORS.get(task.operation)
+        if executor is None:
+            raise AutomationError(f"不支持的任务操作类型：{task.operation.value}")
+        executor.execute(self, task, button.center)
+        self.adb.back()
+        self.wait_for_task_dialog(timeout=20)
+        self.wait_for_task_list_stable(timeout=20)
+        self.claim_reward(task)
+
+    def tap_task_button(self, point: tuple[int, int]) -> None:
+        self.adb.tap(point)
+
+    def wait_for_task_page(self) -> None:
+        self.wait_for_task_target_page()
+
+    def read_task_page_texts(self) -> Sequence[str]:
+        _, items = self.scan()
+        return [item.text for item in items]
+
+    def run_swipe_browse(self, duration_seconds: float) -> None:
+        self.browse_for_reward(duration_seconds)
+
+    def run(self) -> None:
+        self.open_task_dialog()
+        completed = 0
+        while True:
+            found = self.find_action_in_list()
+            if found is None:
+                print(f"任务池中已无可执行任务，共完成 {completed} 次")
+                return
+
+            task, button = found
+            self.execute_task(task, button)
+            completed += 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="支付宝芭芭农场自动化脚本")
     parser.add_argument(
         "module",
         nargs="?",
-        choices=("fertilize", "goods"),
+        choices=("fertilize", "goods", "tasks"),
         default="fertilize",
-        help="运行模块：fertilize（施肥，默认）或 goods（逛农货/百县百品）",
+        help="运行模块：fertilize（施肥，默认）、goods（逛农货/百县百品）或 tasks（做任务领肥料）",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
     parser.add_argument("--threshold", type=int, default=600, help="停止施肥的余额阈值（默认：600）")
@@ -339,10 +641,13 @@ def main() -> None:
     if args.max_clicks is not None and args.max_clicks < 1:
         raise SystemExit("max-clicks 必须大于 0")
 
+    adb: Adb | None = None
     try:
         adb = Adb(args.serial)
         if args.module == "goods":
             GoodsAutomation(adb, browse_seconds=args.browse_seconds).run()
+        elif args.module == "tasks":
+            TaskAutomation(adb, browse_seconds=args.browse_seconds).run()
         else:
             FarmAutomation(
                 adb,
@@ -353,6 +658,12 @@ def main() -> None:
         print("\n已由用户停止")
     except AutomationError as exc:
         raise SystemExit(f"自动化已安全停止：{exc}") from exc
+    finally:
+        if adb is not None:
+            try:
+                adb.allow_screen_sleep()
+            except AutomationError as exc:
+                print(f"警告：恢复屏幕自动休眠失败：{exc}")
 
 
 if __name__ == "__main__":
