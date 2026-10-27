@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
+from enum import Enum
 from typing import Sequence
 
 from babanongchang.browsing import swipe_browse
@@ -17,6 +19,28 @@ from babanongchang.navigation import back_until
 
 
 TAOBAO_SEARCH_TASKS = ("搜一搜你喜欢的商品", "搜一搜你心仪的宝贝")
+
+
+class TaobaoTaskOperation(Enum):
+    SEARCH = "search"
+    SWIPE_BROWSE = "swipe_browse"
+    STAY = "stay"
+
+
+@dataclass(frozen=True)
+class TaobaoTaskDefinition:
+    name: str
+    operation: TaobaoTaskOperation
+
+
+TAOBAO_TASKS = (
+    *(
+        TaobaoTaskDefinition(name, TaobaoTaskOperation.SEARCH)
+        for name in TAOBAO_SEARCH_TASKS
+    ),
+    TaobaoTaskDefinition("发现精选好物", TaobaoTaskOperation.SWIPE_BROWSE),
+    TaobaoTaskDefinition("看严选推荐商品", TaobaoTaskOperation.STAY),
+)
 
 
 def find_taobao_farm_entry(items: Sequence[OcrText]) -> OcrText | None:
@@ -67,6 +91,22 @@ def find_available_taobao_search_task(
     return None
 
 
+def find_available_taobao_task(
+    items: Sequence[OcrText], image_shape: tuple[int, ...]
+) -> tuple[TaobaoTaskDefinition, OcrText] | None:
+    """查找当前页面中位置最靠上的可执行任务。"""
+    available = []
+    for task in TAOBAO_TASKS:
+        button = find_taobao_task_action(items, image_shape, task.name)
+        if button is not None:
+            available.append((task, button))
+    return min(
+        available,
+        key=lambda result: (result[1].center[1], result[1].center[0]),
+        default=None,
+    )
+
+
 def is_taobao_search_reward_page(items: Sequence[OcrText]) -> bool:
     texts = [item.normalized_text for item in items]
     return any("搜索有福利" in text for text in texts) and any(
@@ -93,6 +133,13 @@ def is_taobao_search_results_page(items: Sequence[OcrText]) -> bool:
     texts = [item.normalized_text for item in items]
     return any("搜索有福利" in text for text in texts) and any(
         "滑动浏览得肥料" in text for text in texts
+    )
+
+
+def is_taobao_discovery_page(items: Sequence[OcrText]) -> bool:
+    texts = [item.normalized_text for item in items]
+    return any(text == "浏览得奖励" for text in texts) and any(
+        "下单得肥料" in text for text in texts
     )
 
 
@@ -266,24 +313,33 @@ class TaobaoAutomation(FarmAutomation):
         completed = 0
         while True:
             snapshot = self.scan()
-            search_task = find_available_taobao_search_task(
-                snapshot.items, snapshot.shape
-            )
-            if search_task is not None:
-                task_name, button = search_task
-                self.open_search_task(task_name, button)
-                self.browse_recommended_search_result()
-                self.return_to_fertilizer_tasks()
-                completed += 1
-                continue
+            found = find_available_taobao_task(snapshot.items, snapshot.shape)
+            if found is None:
+                print(
+                    f"所有已接入任务均不可执行，今日任务已清空，共完成 {completed} 次"
+                )
+                return
 
-            recommended_button = find_taobao_task_action(
-                snapshot.items, snapshot.shape, "看严选推荐商品"
-            )
-            if recommended_button is not None:
+            task, button = found
+            if task.operation is TaobaoTaskOperation.SEARCH:
+                self.open_search_task(task.name, button)
+                self.browse_recommended_search_result()
+            elif task.operation is TaobaoTaskOperation.SWIPE_BROWSE:
+                print(f"开始执行“{task.name}”")
+                self.tap_and_wait(
+                    button.center,
+                    lambda current: (
+                        current if is_taobao_discovery_page(current.items) else None
+                    ),
+                    timeout=20000,
+                    interval=500,
+                    error=f"点击“{task.name}”后未进入商品浏览页面",
+                )
+                swipe_browse(self.adb, duration_seconds=18)
+            elif task.operation is TaobaoTaskOperation.STAY:
                 print("开始执行“看严选推荐商品”")
                 self.tap_and_wait(
-                    recommended_button.center,
+                    button.center,
                     lambda current: (
                         current
                         if is_taobao_recommended_video_page(current.items)
@@ -295,12 +351,11 @@ class TaobaoAutomation(FarmAutomation):
                 )
                 print("视频页面停留 18 秒")
                 time.sleep(18)
-                self.return_to_fertilizer_tasks()
-                completed += 1
-                continue
+            else:
+                raise AutomationError(f"不支持的淘宝任务操作：{task.operation.value}")
 
-            print(f"所有已接入任务均不可执行，今日任务已清空，共完成 {completed} 次")
-            return
+            self.return_to_fertilizer_tasks()
+            completed += 1
 
     def run(self) -> None:
         self.ensure_fertilizer_tasks_page()

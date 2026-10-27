@@ -5,11 +5,14 @@ import numpy as np
 from babanongchang.handle import OcrText
 from babanongchang.taobao import (
     TaobaoAutomation,
+    TaobaoTaskOperation,
+    find_available_taobao_task,
     find_available_taobao_search_task,
     find_taobao_farm_entry,
     find_taobao_fertilizer_entry,
     find_taobao_recommended_keyword,
     find_taobao_task_action,
+    is_taobao_discovery_page,
     is_taobao_farm_page,
     is_taobao_fertilizer_tasks_page,
     is_taobao_recommended_video_page,
@@ -111,6 +114,47 @@ class TaobaoPageTest(unittest.TestCase):
             ("搜一搜你心仪的宝贝", desired),
         )
 
+    def test_selects_supported_task_in_screen_order(self) -> None:
+        discovery = item("去完成", 614, 591)
+        search = item("去完成", 614, 719)
+        recommended = item("去完成", 614, 976)
+        items = [
+            item("发现精选好物(3/6)", 269, 570),
+            discovery,
+            item("搜一搜你喜欢的商品(4/6)", 306, 699),
+            search,
+            item("看严选推荐商品(2/5)", 281, 957),
+            recommended,
+        ]
+
+        found = find_available_taobao_task(items, (1600, 720, 3))
+
+        self.assertIsNotNone(found)
+        assert found is not None
+        task, button = found
+        self.assertEqual(task.name, "发现精选好物")
+        self.assertIs(task.operation, TaobaoTaskOperation.SWIPE_BROWSE)
+        self.assertIs(button, discovery)
+
+    def test_screen_order_takes_priority_over_task_type(self) -> None:
+        search = item("去完成", 614, 591)
+        discovery = item("去完成", 614, 719)
+        items = [
+            item("搜一搜你心仪的宝贝(4/6)", 306, 570),
+            search,
+            item("发现精选好物(3/6)", 269, 699),
+            discovery,
+        ]
+
+        found = find_available_taobao_task(items, (1600, 720, 3))
+
+        self.assertIsNotNone(found)
+        assert found is not None
+        task, button = found
+        self.assertEqual(task.name, "搜一搜你心仪的宝贝")
+        self.assertIs(task.operation, TaobaoTaskOperation.SEARCH)
+        self.assertIs(button, search)
+
     def test_recognizes_search_reward_page(self) -> None:
         items = [item("搜索有福利", 125, 99), item("搜索后浏览立得奖励", 572, 95)]
         self.assertTrue(is_taobao_search_reward_page(items))
@@ -127,6 +171,16 @@ class TaobaoPageTest(unittest.TestCase):
     def test_recognizes_search_results_page(self) -> None:
         items = [item("搜索有福利", 136, 101), item("滑动浏览得肥料", 520, 100)]
         self.assertTrue(is_taobao_search_results_page(items))
+
+    def test_recognizes_discovery_product_page(self) -> None:
+        items = [
+            item("浏览得奖励", 135, 101),
+            item("下单得肥料+167000", 203, 671),
+        ]
+        self.assertTrue(is_taobao_discovery_page(items))
+
+    def test_does_not_treat_other_reward_page_as_discovery_page(self) -> None:
+        self.assertFalse(is_taobao_discovery_page([item("浏览得奖励", 135, 101)]))
 
     def test_recognizes_recommended_product_video_page(self) -> None:
         items = [item("滑动浏览得", 646, 1007), item("肥料", 646, 1030)]
