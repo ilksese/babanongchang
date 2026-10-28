@@ -22,6 +22,7 @@ TAOBAO_SEARCH_TASKS = ("搜一搜你喜欢的商品", "搜一搜你心仪的宝�
 
 
 class TaobaoTaskOperation(Enum):
+    SIGN_IN = "sign_in"
     SEARCH = "search"
     SWIPE_BROWSE = "swipe_browse"
     STAY = "stay"
@@ -41,6 +42,8 @@ TAOBAO_TASKS = (
     TaobaoTaskDefinition("发现精选好物", TaobaoTaskOperation.SWIPE_BROWSE),
     TaobaoTaskDefinition("看严选推荐商品", TaobaoTaskOperation.STAY),
 )
+
+TAOBAO_SIGN_IN_TASK = TaobaoTaskDefinition("去签到", TaobaoTaskOperation.SIGN_IN)
 
 
 def find_taobao_farm_entry(items: Sequence[OcrText]) -> OcrText | None:
@@ -96,6 +99,9 @@ def find_available_taobao_task(
 ) -> tuple[TaobaoTaskDefinition, OcrText] | None:
     """查找当前页面中位置最靠上的可执行任务。"""
     available = []
+    sign_in = TextHandle.find_text(items, "去签到", exact=True)
+    if sign_in is not None:
+        available.append((TAOBAO_SIGN_IN_TASK, sign_in))
     for task in TAOBAO_TASKS:
         button = find_taobao_task_action(items, image_shape, task.name)
         if button is not None:
@@ -321,6 +327,20 @@ class TaobaoAutomation(FarmAutomation):
                 return
 
             task, button = found
+            if task.operation is TaobaoTaskOperation.SIGN_IN:
+                print("点击“去签到”")
+                self.tap_and_wait(
+                    button.center,
+                    lambda current: (
+                        current
+                        if is_taobao_fertilizer_tasks_page(current.items)
+                        and not self.has_text(current.items, "去签到", exact=True)
+                        else None
+                    ),
+                    error="签到后未确认任务列表中的“去签到”按钮消失",
+                )
+                completed += 1
+                continue
             if task.operation is TaobaoTaskOperation.SEARCH:
                 self.open_search_task(task.name, button)
                 self.browse_recommended_search_result()
