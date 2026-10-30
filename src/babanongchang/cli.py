@@ -23,6 +23,10 @@ from babanongchang.task_executors import TASK_EXECUTORS
 from babanongchang.task_pool import TASK_POOL, TaskDefinition, TaskOperation
 
 
+ALIPAY_PACKAGE = "com.eg.android.AlipayGphone"
+ALIPAY_HOME_ACTIVITY = f"{ALIPAY_PACKAGE}/com.alipay.mobile.quinox.LauncherActivity"
+
+
 def parse_fertilizer(items: Sequence[OcrText], image_shape: tuple[int, ...]) -> int | None:
     """从施肥按钮区域解析“肥料 + 数字”，排除商品列表中的“肥料 +70000”。"""
     height, width = image_shape[:2]
@@ -191,6 +195,13 @@ class Adb:
 
     def back(self) -> None:
         self._run("shell", "input", "keyevent", "KEYCODE_BACK")
+
+    def installed_packages(self) -> set[str]:
+        result = self._run("shell", "pm", "list", "packages")
+        lines = result.stdout.decode("utf-8", errors="replace").splitlines()
+        if any(line.strip() and not line.startswith("package:") for line in lines):
+            raise AutomationError("无法读取设备已安装应用列表")
+        return {line.removeprefix("package:").strip() for line in lines if line.strip()}
 
     def launch_package(self, package: str) -> None:
         self._run(
@@ -401,6 +412,49 @@ class TaskAutomation(FarmAutomation):
             time.sleep(0.6)
         raise AutomationError("未识别到屏幕右下方的“领肥料”按钮")
 
+    def return_to_farm(self, timeout: float = 20) -> None:
+        def is_farm(snapshot: ScreenSnapshot) -> bool:
+            return (
+                not has_task_dialog(snapshot.items)
+                and parse_fertilizer(snapshot.items, snapshot.shape) is not None
+                and self.has_text(snapshot.items, "施肥", exact=True)
+            )
+
+        snapshot = self.scan()
+        if not is_farm(snapshot):
+            title = next(
+                (
+                    found
+                    for text in TASK_DIALOG_TITLES
+                    if (found := self.find_text(snapshot.items, text)) is not None
+                ),
+                None,
+            )
+            if title is None:
+                raise AutomationError("未识别到任务弹窗或农场首页，停止关闭弹窗以避免误点")
+            height, width = snapshot.shape[:2]
+            title_top = float(np.min(title.box[:, 1]))
+            mask_top = int(height * 0.12)
+            mask_bottom = int(title_top - height * 0.06)
+            if mask_bottom <= mask_top:
+                raise AutomationError("任务弹窗上方没有可确认的遮罩区域，已停止以避免误点")
+            mask_point = (width // 2, (mask_top + mask_bottom) // 2)
+            self.tap_and_wait(
+                mask_point,
+                lambda current: current if is_farm(current) else None,
+                timeout=int(timeout * 1000),
+                interval=600,
+                error="点击遮罩后任务弹窗未关闭或未回到农场首页，已停止且不发送返回键",
+            )
+        self.wait_for_stable_screen(
+            is_farm,
+            stable_scans=2,
+            timeout=int(timeout * 1000),
+            interval=600,
+            error="任务结束后芭芭农场首页未能稳定",
+        )
+        print("已关闭任务弹窗并返回芭芭农场首页")
+
     def scroll_task_list(self, toward_bottom: bool = True) -> None:
         image = self.adb.screenshot()
         height, width = image.shape[:2]
@@ -571,14 +625,145 @@ class TaskAutomation(FarmAutomation):
             completed += 1
 
 
+class AlipayAutomation(TaskAutomation):
+    """自动进入支付宝芭芭农场并完成一轮支付宝流程。"""
+
+    def __init__(self, adb: Adb, threshold: int = 600, browse_seconds: float = 18) -> None:
+        super().__init__(adb, browse_seconds=browse_seconds)
+        self.threshold = threshold
+
+    @staticmethod
+    def is_home(snapshot: ScreenSnapshot) -> bool:
+        def has_label(text: str, region: RelativeRegion) -> bool:
+            return TextHandle.find_text(
+                snapshot.items,
+                text,
+                exact=True,
+                region=region,
+                image_shape=snapshot.shape,
+            ) is not None
+
+        top = RelativeRegion(left=0, top=0.08, right=1, bottom=0.25)
+        bottom = RelativeRegion(left=0, top=0.8, right=1, bottom=1)
+        actions = sum(
+            has_label(text, top)
+            for text in ("扫一扫", "收付款", "付钱/收钱")
+        )
+        navigation = sum(
+            has_label(text, bottom) for text in ("理财", "消息", "我的")
+        )
+        return (
+            has_label("首页", bottom) and actions >= 1
+        ) or (actions >= 2 and navigation >= 2)
+
+    @staticmethod
+    def is_farm(snapshot: ScreenSnapshot) -> bool:
+        return (
+            not has_task_dialog(snapshot.items)
+            and parse_fertilizer(snapshot.items, snapshot.shape) is not None
+            and TextHandle.has_text(snapshot.items, "施肥", exact=True)
+        )
+
+    def ensure_farm_page(self, timeout: float = 60) -> None:
+        self.adb.start_activity(ALIPAY_HOME_ACTIVITY)
+        print("已启动支付宝，正在查找芭芭农场")
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            snapshot = self.scan()
+            if self.is_farm(snapshot):
+                self.wait_for_stable_screen(
+                    self.is_farm,
+                    timeout=20000,
+                    interval=500,
+                    error="支付宝芭芭农场首页未能稳定",
+                )
+                return
+            if has_task_dialog(snapshot.items):
+                self.wait_for_task_list_stable()
+                return
+            if self.is_home(snapshot):
+                entry = self.wait_for_stable_text(
+                    "芭芭农场",
+                    exact=True,
+                    screen_predicate=self.is_home,
+                    timeout=20000,
+                    interval=500,
+                    error="支付宝首页未找到稳定的“芭芭农场”入口",
+                )
+                self.tap_and_wait(
+                    entry.center,
+                    lambda current: current if self.is_farm(current) else None,
+                    timeout=30000,
+                    interval=500,
+                    error="点击支付宝首页“芭芭农场”后未进入农场首页",
+                )
+                self.wait_for_stable_screen(
+                    self.is_farm,
+                    timeout=20000,
+                    interval=500,
+                    error="支付宝芭芭农场首页未能稳定",
+                )
+                print("已从支付宝首页进入芭芭农场")
+                return
+            time.sleep(0.5)
+        raise AutomationError(
+            "未能识别支付宝首页或芭芭农场，已停止且未发送返回键；"
+            "请确认已登录并打开支付宝首页"
+        )
+
+    def run(self, max_clicks: int | None = None) -> None:
+        self.ensure_farm_page()
+        print("开始支付宝流程：做任务领肥料 → 逛农货 → 施肥")
+        super().run()
+        self.return_to_farm()
+        GoodsAutomation(self.adb, browse_seconds=self.browse_seconds).run()
+        FarmAutomation(
+            self.adb,
+            threshold=self.threshold,
+            browse_seconds=self.browse_seconds,
+        ).run(max_clicks=max_clicks)
+        print("支付宝流程已完成")
+
+
+def run_workflow(
+    adb: Adb,
+    *,
+    threshold: int = 600,
+    browse_seconds: float = 18,
+    max_clicks: int | None = None,
+) -> None:
+    """按安装情况执行支付宝和淘宝，每个应用最多执行一轮。"""
+    from babanongchang.taobao import TaobaoAutomation
+
+    completed: set[str] = set()
+    while True:
+        installed = adb.installed_packages()
+        if ALIPAY_PACKAGE in installed and ALIPAY_PACKAGE not in completed:
+            AlipayAutomation(
+                adb,
+                threshold=threshold,
+                browse_seconds=browse_seconds,
+            ).run(max_clicks=max_clicks)
+            completed.add(ALIPAY_PACKAGE)
+        elif TaobaoAutomation.PACKAGE in installed and TaobaoAutomation.PACKAGE not in completed:
+            TaobaoAutomation(adb).run()
+            completed.add(TaobaoAutomation.PACKAGE)
+        else:
+            if not completed:
+                print("未安装支付宝或淘宝，流程结束")
+            else:
+                print("所有已安装应用的芭芭农场流程已完成")
+            return
+
+
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="支付宝芭芭农场自动化脚本")
+    parser = argparse.ArgumentParser(description="支付宝/淘宝芭芭农场自动化脚本")
     parser.add_argument(
         "module",
         nargs="?",
-        choices=("fertilize", "goods", "tasks", "taobao"),
-        default="fertilize",
-        help="运行模块：fertilize（施肥，默认）、goods（逛农货/百县百品）、tasks（做任务领肥料）或 taobao（淘宝流程）",
+        choices=("all", "fertilize", "goods", "tasks", "taobao"),
+        default="all",
+        help="运行模块：all（默认，自动检测安装情况，支付宝优先，再执行淘宝）、fertilize（仅施肥）、goods（逛农货/百县百品）、tasks（做任务领肥料）或 taobao（仅淘宝流程）",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
     parser.add_argument("--threshold", type=int, default=600, help="停止施肥的余额阈值（默认：600）")
@@ -602,7 +787,14 @@ def main() -> None:
     adb: Adb | None = None
     try:
         adb = Adb(args.serial)
-        if args.module == "goods":
+        if args.module == "all":
+            run_workflow(
+                adb,
+                threshold=args.threshold,
+                browse_seconds=args.browse_seconds,
+                max_clicks=args.max_clicks,
+            )
+        elif args.module == "goods":
             GoodsAutomation(adb, browse_seconds=args.browse_seconds).run()
         elif args.module == "tasks":
             TaskAutomation(adb, browse_seconds=args.browse_seconds).run()
