@@ -1,7 +1,11 @@
 import unittest
 
-from babanongchang.task_executors import ClickAndReturnExecutor, SwipeBrowseExecutor
-from babanongchang.task_pool import TaskDefinition, TaskMatcher, TaskOperation
+from babanongchang.task_executors import (
+    TASK_EXECUTORS,
+    ClickAndReturnExecutor,
+    SwipeBrowseExecutor,
+)
+from babanongchang.task_pool import TASK_POOL, TaskDefinition, TaskMatcher, TaskOperation
 
 
 class FakeExecutionContext:
@@ -42,6 +46,17 @@ def task(
 
 
 class SwipeBrowseExecutorTest(unittest.TestCase):
+    def test_local_flavors_task_uses_registered_browse_executor(self) -> None:
+        definition = next(
+            task for task in TASK_POOL if task.key == "browse-local-flavors"
+        )
+        context = FakeExecutionContext()
+        TASK_EXECUTORS[definition.operation].execute(context, definition, (100, 200))
+        self.assertEqual(
+            context.events,
+            [("tap", (100, 200)), "wait", "read", ("browse", 18)],
+        )
+
     def test_browses_for_configured_duration(self) -> None:
         context = FakeExecutionContext()
         SwipeBrowseExecutor().execute(

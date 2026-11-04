@@ -74,6 +74,14 @@ TASK_CATALOG = (
         duration_seconds=18,
     ),
     TaskDefinition(
+        key="browse-local-flavors",
+        name="逛乡土寻味专场得肥料",
+        operation=TaskOperation.SWIPE_BROWSE,
+        matchers=(TaskMatcher(fixed_text="逛乡土寻味专场得肥料"),),
+        action_labels=("去完成", "去逛逛"),
+        duration_seconds=18,
+    ),
+    TaskDefinition(
         key="visit-alipay-for-beans",
         name="逛支付宝得金豆",
         operation=TaskOperation.CLICK_AND_RETURN,

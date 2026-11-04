@@ -21,6 +21,17 @@ class TaskMatcherTest(unittest.TestCase):
             TaskMatcher(fixed_text="任务", pattern="任务")
 
 
+class SwipeBrowseTaskPoolTest(unittest.TestCase):
+    def test_local_flavors_task_browses_for_eighteen_seconds(self) -> None:
+        for title in ("逛乡土寻味专场得肥料", "逛乡土寻味专场得肥料 (0/1)"):
+            with self.subTest(title=title):
+                matched = [task for task in TASK_POOL if task.matches(title)]
+                self.assertEqual(len(matched), 1)
+                self.assertEqual(matched[0].operation, TaskOperation.SWIPE_BROWSE)
+                self.assertEqual(matched[0].duration_seconds, 18)
+                self.assertEqual(matched[0].action_labels, ("去完成", "去逛逛"))
+
+
 class ClickAndReturnTaskPoolTest(unittest.TestCase):
     def test_matches_fixed_click_and_return_tasks(self) -> None:
         titles = (
