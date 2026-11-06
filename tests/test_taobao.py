@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -14,6 +14,7 @@ from babanongchang.taobao import (
     find_taobao_recommended_keyword,
     find_taobao_task_action,
     is_taobao_discovery_page,
+    is_taobao_coins_page,
     is_taobao_farm_page,
     is_taobao_fertilizer_tasks_page,
     is_taobao_recommended_video_page,
@@ -50,6 +51,76 @@ class TestableTaobaoAutomation(TaobaoAutomation):
 
 
 class TaobaoAutomationTest(unittest.TestCase):
+    def test_coins_task_waits_for_destination_stays_five_seconds_and_returns(self) -> None:
+        image = np.zeros((1600, 720, 3), dtype=np.uint8)
+        button = item("去完成", 614, 955)
+        titles = (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345))
+        before = ScreenSnapshot(
+            image, (*titles, item("去淘金币逛买更省钱(0/1)", 306, 934), button)
+        )
+        destination = ScreenSnapshot(
+            image, (item("淘金币", 82, 157), item("去赚金币", 75, 646))
+        )
+        automation = TaobaoAutomation.__new__(TaobaoAutomation)
+        automation.adb = Mock()
+        automation.scan = Mock(side_effect=[before, ScreenSnapshot(image, titles)])
+        events = []
+
+        def tap_and_wait(point, matcher, **kwargs):
+            self.assertEqual(point, button.center)
+            self.assertIsNone(matcher(before))
+            self.assertIsNone(matcher(ScreenSnapshot(image, ())))
+            self.assertIs(matcher(destination), destination)
+            events.append("entered")
+
+        automation.tap_and_wait = Mock(side_effect=tap_and_wait)
+        automation.return_to_fertilizer_tasks = Mock(
+            side_effect=lambda: events.append("returned")
+        )
+        with patch(
+            "babanongchang.taobao.time.sleep",
+            side_effect=lambda _: events.append("stayed"),
+        ) as sleep:
+            automation.complete_supported_tasks()
+
+        automation.tap_and_wait.assert_called_once()
+        sleep.assert_called_once_with(5)
+        automation.return_to_fertilizer_tasks.assert_called_once_with()
+        automation.adb.swipe.assert_not_called()
+        self.assertEqual(events, ["entered", "stayed", "returned"])
+
+    def test_reuses_current_task_list_without_starting_home_activity(self) -> None:
+        snapshot = ScreenSnapshot(
+            np.zeros((1600, 720, 3), dtype=np.uint8),
+            (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345)),
+        )
+        automation = TaobaoAutomation.__new__(TaobaoAutomation)
+        automation.adb = Mock()
+        automation.scan = Mock(return_value=snapshot)
+        automation.complete_supported_tasks = Mock()
+
+        automation.run()
+
+        automation.adb.start_activity.assert_not_called()
+        automation.adb.tap.assert_not_called()
+        automation.adb.back.assert_not_called()
+        automation.complete_supported_tasks.assert_called_once_with()
+
+    def test_starts_home_activity_when_current_page_is_not_task_list(self) -> None:
+        image = np.zeros((1600, 720, 3), dtype=np.uint8)
+        tasks = ScreenSnapshot(
+            image,
+            (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345)),
+        )
+        automation = TaobaoAutomation.__new__(TaobaoAutomation)
+        automation.adb = Mock()
+        automation.scan = Mock(side_effect=[ScreenSnapshot(image, ()), tasks])
+
+        automation.ensure_fertilizer_tasks_page()
+
+        automation.adb.start_activity.assert_called_once_with(automation.HOME_ACTIVITY)
+        self.assertEqual(automation.scan.call_count, 2)
+
     def test_sign_in_clicks_once_and_rescans_without_returning(self) -> None:
         button = item("去签到", 600, 464)
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
@@ -88,6 +159,17 @@ class TaobaoAutomationTest(unittest.TestCase):
 
 
 class TaobaoPageTest(unittest.TestCase):
+    def test_recognizes_coins_page_but_not_task_title(self) -> None:
+        self.assertTrue(
+            is_taobao_coins_page([
+                item("淘金币", 82, 157), item("去赚金币", 75, 646)
+            ])
+        )
+        self.assertFalse(
+            is_taobao_coins_page([item("去淘金币逛买更省钱(0/1)", 306, 934)])
+        )
+        self.assertFalse(is_taobao_coins_page([item("淘金币", 82, 157)]))
+
     def test_finds_sign_in_button_without_task_title(self) -> None:
         button = item("去 签到", 600, 464)
         found = find_available_taobao_task([button], (1600, 720, 3))

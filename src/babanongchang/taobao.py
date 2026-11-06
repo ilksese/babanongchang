@@ -26,6 +26,7 @@ class TaobaoTaskOperation(Enum):
     SEARCH = "search"
     SWIPE_BROWSE = "swipe_browse"
     STAY = "stay"
+    COINS_STAY = "coins_stay"
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,7 @@ TAOBAO_TASKS = (
     ),
     TaobaoTaskDefinition("发现精选好物", TaobaoTaskOperation.SWIPE_BROWSE),
     TaobaoTaskDefinition("看严选推荐商品", TaobaoTaskOperation.STAY),
+    TaobaoTaskDefinition("去淘金币", TaobaoTaskOperation.COINS_STAY),
 )
 
 TAOBAO_SIGN_IN_TASK = TaobaoTaskDefinition("去签到", TaobaoTaskOperation.SIGN_IN)
@@ -156,6 +158,12 @@ def is_taobao_recommended_video_page(items: Sequence[OcrText]) -> bool:
     )
 
 
+def is_taobao_coins_page(items: Sequence[OcrText]) -> bool:
+    return TextHandle.has_text(items, "淘金币", exact=True) and TextHandle.has_text(
+        items, "去赚金币", exact=True
+    )
+
+
 class TaobaoAutomation(FarmAutomation):
     """执行淘宝芭芭农场任务流程。"""
 
@@ -236,6 +244,10 @@ class TaobaoAutomation(FarmAutomation):
 
     def ensure_fertilizer_tasks_page(self, timeout: float = 60) -> None:
         """从任意设备页面进入淘宝芭芭农场肥料任务列表。"""
+        if is_taobao_fertilizer_tasks_page(self.scan().items):
+            print("检测到已在淘宝肥料任务列表")
+            return
+
         self.adb.start_activity(self.HOME_ACTIVITY)
         print("已启动淘宝主页 Activity")
         deadline = time.monotonic() + timeout
@@ -356,6 +368,19 @@ class TaobaoAutomation(FarmAutomation):
                     error=f"点击“{task.name}”后未进入商品浏览页面",
                 )
                 swipe_browse(self.adb, duration_seconds=18)
+            elif task.operation is TaobaoTaskOperation.COINS_STAY:
+                print(f"开始执行“{task.name}”")
+                self.tap_and_wait(
+                    button.center,
+                    lambda current: (
+                        current if is_taobao_coins_page(current.items) else None
+                    ),
+                    timeout=20000,
+                    interval=500,
+                    error="点击“去淘金币”后未进入淘金币页面",
+                )
+                print("淘金币页面停留 5 秒")
+                time.sleep(5)
             elif task.operation is TaobaoTaskOperation.STAY:
                 print("开始执行“看严选推荐商品”")
                 self.tap_and_wait(
