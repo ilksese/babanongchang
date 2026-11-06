@@ -761,11 +761,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "module",
         nargs="?",
-        choices=("all", "fertilize", "goods", "tasks", "taobao"),
+        choices=("all", "fertilize", "goods", "tasks", "taobao", "games"),
         default="all",
-        help="运行模块：all（默认，自动检测安装情况，支付宝优先，再执行淘宝）、fertilize（仅施肥）、goods（逛农货/百县百品）、tasks（做任务领肥料）或 taobao（仅淘宝流程）",
+        help="运行模块：all（默认，自动检测安装情况，支付宝优先，再执行淘宝）、fertilize（仅施肥）、goods（逛农货/百县百品）、tasks（做任务领肥料）、taobao（仅淘宝流程）或 games（需指定 --majiang）",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
+    parser.add_argument("--majiang", action="store_true", help="games 模块：使用免费磁铁连续闯关，直到手动停止或步骤超时")
     parser.add_argument("--threshold", type=int, default=600, help="停止施肥的余额阈值（默认：600）")
     parser.add_argument(
         "--browse-seconds",
@@ -779,6 +780,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if (args.module == "games") != args.majiang:
+        raise SystemExit("麻将游戏请使用 games --majiang")
     if args.threshold < 0 or args.browse_seconds < 15:
         raise SystemExit("threshold 不能为负数，browse-seconds 不能少于 15 秒")
     if args.max_clicks is not None and args.max_clicks < 1:
@@ -787,7 +790,11 @@ def main() -> None:
     adb: Adb | None = None
     try:
         adb = Adb(args.serial)
-        if args.module == "all":
+        if args.module == "games":
+            from babanongchang.majiang import MajiangAutomation
+
+            MajiangAutomation(adb).run()
+        elif args.module == "all":
             run_workflow(
                 adb,
                 threshold=args.threshold,
