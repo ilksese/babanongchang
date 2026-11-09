@@ -6,6 +6,14 @@ data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int)
 data class OcrLine(val text: String, val bounds: Bounds)
 data class OcrFrame(val width: Int, val height: Int, val lines: List<OcrLine>)
 data class FarmRecognition(val fertilizerBalance: Long, val button: Bounds)
+data class PageNode(
+    val text: String,
+    val bounds: Bounds,
+    val className: String = "",
+    val paneTitle: String? = null,
+    val clickable: Boolean = false,
+)
+data class PageEvidence(val windowId: Int, val nodes: List<PageNode>)
 enum class VolumeKey { UP, DOWN }
 
 data class RunView(
@@ -17,9 +25,10 @@ data class RunView(
 )
 
 /** Platform boundary: callbacks, timers and user events are serialized on the main thread. */
-interface ReadOnlyPlatform {
+interface SingleFertilizationPlatform {
     fun nowMillis(): Long
     fun unavailableReason(): String?
+    fun pageEvidence(): PageEvidence?
     fun show(view: RunView)
     fun schedule(delayMillis: Long, action: () -> Unit)
     /** Check isCurrent before every async continuation, especially before starting OCR. */
@@ -28,7 +37,7 @@ interface ReadOnlyPlatform {
     fun tap(button: Bounds, callback: (Boolean) -> Unit): Boolean
 }
 
-class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
+class SingleFertilizationRun(private val platform: SingleFertilizationPlatform) {
     var view = RunView()
         private set
 
@@ -37,6 +46,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
     private var remainingMillis = 10_000L
     private var baseline: Long? = null
     private var attemptDispatched = false
+    private var recognizingWindowId: Int? = null
     private val heldKeys = mutableMapOf<VolumeKey, Boolean>()
 
     fun onVolumeKey(key: VolumeKey, down: Boolean, repeatCount: Int = 0): Boolean {
@@ -70,6 +80,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
         if (!view.running) return
         remainingMillis = (deadline - platform.nowMillis()).coerceAtLeast(0)
         generation++
+        recognizingWindowId = null
         view = RunView(paused = true, message = "已暂停：请通过浮层继续或结束；${attemptStatus()}")
         platform.show(view)
     }
@@ -102,9 +113,15 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
             return
         }
         var delivered = false
+        val capturedPage = platform.pageEvidence()
+        recognizingWindowId = capturedPage?.windowId
         platform.captureAndRecognize({ active(token) && !delivered && platform.nowMillis() < deadline }) { result ->
             if (!active(token) || delivered) return@captureAndRecognize
             delivered = true
+            if (capturedPage != platform.pageEvidence()) {
+                stop("识别期间页面发生变化")
+                return@captureAndRecognize
+            }
             val problem = platform.unavailableReason()
             if (problem != null) {
                 stop(problem)
@@ -137,6 +154,11 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
             val balance = balanceLabels.singleOrNull()?.text
                 ?.let { Regex("肥料[：:]?([0-9]+)").matchEntire(it)?.groupValues?.get(1)?.toLongOrNull() }
             val button = lines.filter { it.text == "施肥" }.singleOrNull()?.bounds
+            // Fail closed on unrecognised page content, not a growing popup phrase blacklist.
+            if (lines.any { it.text != "芭芭农场" && it.text != "施肥" && it !in balanceLabels }) {
+                stop("页面存在未确认内容或弹窗")
+                return@captureAndRecognize
+            }
             if (balance == null || (baseline == null && (button == null ||
                 button.left < 0 || button.top < 0 || button.right > frame.width ||
                 button.bottom > frame.height || button.left >= button.right || button.top >= button.bottom))
@@ -145,6 +167,26 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
                 return@captureAndRecognize
             }
             val before = baseline
+            // shortcut: opaque image-only overlays can escape OCR/accessibility; revalidate on target-page changes.
+            // Require positive accessible farm evidence and reject all unknown controls/content.
+            val page = platform.pageEvidence()
+            val nodes = page?.nodes.orEmpty()
+            val texts = nodes.map { it.text.replace(Regex("\\s+"), "") }
+            val accessibleButton = nodes.filter { it.clickable && it.text.replace(Regex("\\s+"), "") == "施肥" }.singleOrNull()
+            if (page == null || texts.count { it == "芭芭农场" } != 1 ||
+                texts.none { it.startsWith("肥料") } || texts.any {
+                    it.isNotEmpty() && it != "芭芭农场" && it != "施肥" &&
+                        !Regex("肥料[：:]?[0-9]*").matches(it)
+                } || nodes.any {
+                    it.className.contains("dialog", ignoreCase = true) || it.paneTitle != null ||
+                        (it.clickable && it.text.replace(Regex("\\s+"), "") != "施肥")
+                } || (before == null && (accessibleButton == null || button == null ||
+                    button.left < accessibleButton.bounds.left || button.top < accessibleButton.bounds.top ||
+                    button.right > accessibleButton.bounds.right || button.bottom > accessibleButton.bounds.bottom))
+            ) {
+                stop("无法确认可访问农场页面，或存在弹窗")
+                return@captureAndRecognize
+            }
             if (before == null) {
                 if (balance <= 600) {
                     finish("未执行：肥料余额 $balance 不大于保护阈值 600；未发起施肥尝试")
@@ -161,19 +203,41 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
                     stop(dispatchProblem)
                     return@captureAndRecognize
                 }
+                if (capturedPage != platform.pageEvidence()) {
+                    baseline = null
+                    stop("识别期间页面发生变化")
+                    return@captureAndRecognize
+                }
                 val accepted = try {
                     platform.tap(requireNotNull(button)) { completed ->
                         if (active(gestureToken) && !completed) gestureFailed()
                     }
-                } catch (_: Exception) { false }
-                if (active(gestureToken) && accepted) attemptDispatched = true
-                if (active(gestureToken) && !accepted) gestureFailed()
+                } catch (_: Exception) {
+                    // Only an explicit false proves no dispatch; an exception leaves delivery unknown.
+                    attemptDispatched = true
+                    gestureFailed()
+                    return@captureAndRecognize
+                }
+                if (active(gestureToken) && accepted) {
+                    attemptDispatched = true
+                    recognizingWindowId = null
+                }
+                if (active(gestureToken) && !accepted) {
+                    baseline = null
+                    stop("施肥手势未派发")
+                }
             } else if (balance < before) {
                 finish("施肥成功：肥料余额 $before → $balance")
             } else {
+                recognizingWindowId = null
                 platform.schedule(500) { if (active(token)) capture(token) }
             }
         }
+    }
+
+    fun onPageChanged(windowId: Int) {
+        // Overlay events have a different window; only an in-flight farm capture is invalidated.
+        if (view.running && recognizingWindowId == windowId) stop("识别期间页面发生变化")
     }
 
     fun stop(reason: String) {
@@ -193,6 +257,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
 
     private fun finish(message: String) {
         generation++
+        recognizingWindowId = null
         view = RunView(message = message)
         platform.show(view)
     }

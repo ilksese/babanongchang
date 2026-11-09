@@ -3,10 +3,10 @@ package com.babanongchang.android
 import org.junit.Assert.*
 import org.junit.Test
 
-class ReadOnlyRunTest {
+class SingleFertilizationRunTest {
     @Test fun oneManualRunAttemptsOnceAndOnlyReducedBalanceConfirmsSuccess() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
 
         run.start()
         assertFalse(platform.state.overlayVisible)
@@ -27,7 +27,7 @@ class ReadOnlyRunTest {
     @Test fun protectionThresholdNeverDispatchesAt600Or599() {
         for (balance in listOf(600L, 599L)) {
             val platform = FakePlatform()
-            ReadOnlyRun(platform).start()
+            SingleFertilizationRun(platform).start()
             platform.advance(200)
             platform.reply(farm(balance))
             assertTrue(platform.taps.isEmpty())
@@ -38,7 +38,7 @@ class ReadOnlyRunTest {
 
     @Test fun gestureCompletionDoesNotConfirmAndUnchangedBalanceTimesOutWithoutRetry() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.reply(farm(601))
         platform.gestureReplies.single()(true)
@@ -63,7 +63,7 @@ class ReadOnlyRunTest {
 
     @Test fun postAttemptPauseFreezesConfirmationBudgetAndResumeOnlyChecksOriginalBalance() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(200)
         platform.reply(farm(1200))
@@ -94,7 +94,7 @@ class ReadOnlyRunTest {
     @Test fun endingAfterAttemptCannotBeResumedAndLateCallbacksCannotPolluteNextManualRun() {
         for (paused in listOf(false, true)) {
             val platform = FakePlatform()
-            val run = ReadOnlyRun(platform)
+            val run = SingleFertilizationRun(platform)
             run.start()
             platform.advance(200)
             platform.reply(farm(1200))
@@ -128,13 +128,29 @@ class ReadOnlyRunTest {
         }
     }
 
-    @Test fun rejectedCancelledOrThrowingGestureStopsUnconfirmedWithoutRetry() {
-        for (failure in listOf("rejected", "cancelled", "exception")) {
+    @Test fun rejectedDispatchReportsNoAttemptAndLateCallbacksCannotChangeIt() {
+        val platform = FakePlatform().apply { acceptsGesture = false }
+        val run = SingleFertilizationRun(platform)
+        run.start()
+        platform.advance(200)
+        platform.reply(farm())
+        assertTrue(platform.taps.isEmpty())
+        assertEquals("已停止：施肥手势未派发；未发起施肥尝试", platform.state.message)
+        val stopped = platform.state
+        platform.gestureReplies.single()(false)
+        platform.gestureReplies.single()(true)
+        run.resume()
+        platform.advance(20_000)
+        assertEquals(stopped, platform.state)
+        assertTrue(platform.taps.isEmpty())
+    }
+
+    @Test fun cancelledOrThrowingGestureStopsUnconfirmedWithoutRetry() {
+        for (failure in listOf("cancelled", "exception")) {
             val platform = FakePlatform().apply {
-                acceptsGesture = failure != "rejected"
                 if (failure == "exception") gestureError = IllegalStateException("private platform data")
             }
-            val run = ReadOnlyRun(platform)
+            val run = SingleFertilizationRun(platform)
             run.start()
             platform.advance(200)
             platform.reply(farm())
@@ -152,7 +168,7 @@ class ReadOnlyRunTest {
     @Test fun interferenceOverridesReducedBalanceAndPostAttemptFailuresRemainUnconfirmed() {
         for (failure in listOf("popup", "page", "permission", "ocr", "stop")) {
             val platform = FakePlatform()
-            val run = ReadOnlyRun(platform)
+            val run = SingleFertilizationRun(platform)
             run.start()
             platform.advance(200)
             platform.reply(farm())
@@ -176,7 +192,7 @@ class ReadOnlyRunTest {
 
     @Test fun confirmationOnlyNeedsValidFarmAndUniqueReducedBalanceNotAnotherButton() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(200)
         platform.reply(farm())
@@ -188,7 +204,7 @@ class ReadOnlyRunTest {
 
     @Test fun noOverlappingCaptureAndOldDuplicateReplyCannotConfirmOrScheduleExtraWork() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(200)
         platform.reply(farm())
@@ -208,23 +224,9 @@ class ReadOnlyRunTest {
         assertEquals(1, platform.taps.size)
     }
 
-    @Test fun permissionLossImmediatelyBeforeDispatchPreventsGesture() {
-        val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
-        run.start()
-        platform.advance(200)
-        platform.onShow = { view -> if (view.running) platform.problem = "无障碍手势能力不可用" }
-        platform.reply(farm())
-        assertTrue(platform.taps.isEmpty())
-        assertTrue(platform.state.overlayVisible)
-        assertFalse(platform.state.running)
-        assertTrue(platform.state.message.contains("未发起施肥尝试"))
-        assertFalse(platform.state.message.contains("结果未确认"))
-    }
-
     @Test fun permissionLossAfterValidRecognitionBeforeDispatchStillReportsNoAttempt() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         platform.onShow = { view ->
             if (view.running && platform.screenshots == 1) {
                 platform.problem = "无障碍手势能力不可用"
@@ -242,7 +244,7 @@ class ReadOnlyRunTest {
 
     @Test fun postAttemptResumePreservesOriginalBaselineAndIgnoresOldGestureFailure() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(200)
         platform.reply(farm(1200))
@@ -258,7 +260,7 @@ class ReadOnlyRunTest {
 
     @Test fun missingPermissionStopsWithoutTakingScreenshot() {
         val platform = FakePlatform().apply { problem = "无障碍截图能力不可用" }
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(10_000)
         assertEquals(0, platform.screenshots)
         assertTrue(platform.state.overlayVisible)
@@ -267,7 +269,7 @@ class ReadOnlyRunTest {
 
     @Test fun stalledCaptureStopsAtTenSecondsAndIgnoresLateOcr() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(9_999)
         assertTrue(platform.state.running)
         platform.advance(1)
@@ -280,7 +282,7 @@ class ReadOnlyRunTest {
 
     @Test fun environmentLossAtPhaseDeadlineStopsWithSpecificReasonBeforeTimeout() {
         val beforeAttempt = FakePlatform()
-        ReadOnlyRun(beforeAttempt).start()
+        SingleFertilizationRun(beforeAttempt).start()
         beforeAttempt.advance(9_999)
         beforeAttempt.problem = "屏幕已关闭或锁定"
         beforeAttempt.advance(1)
@@ -288,7 +290,7 @@ class ReadOnlyRunTest {
         assertTrue(beforeAttempt.taps.isEmpty())
 
         val afterAttempt = FakePlatform()
-        val run = ReadOnlyRun(afterAttempt)
+        val run = SingleFertilizationRun(afterAttempt)
         run.start()
         afterAttempt.advance(200)
         afterAttempt.reply(farm(1200))
@@ -301,7 +303,7 @@ class ReadOnlyRunTest {
 
     @Test fun wrongPageStopsWithoutClaimingRecognition() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.reply(farm().copy(lines = farm().lines.drop(1)))
         assertNull(platform.state.recognition)
@@ -310,7 +312,7 @@ class ReadOnlyRunTest {
 
     @Test fun ocrFailureStopsWithSafeReasonInsteadOfLeakingRawText() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.requests.removeAt(0)(Result.failure(IllegalStateException("private OCR content")))
         assertTrue(platform.state.overlayVisible)
@@ -328,7 +330,7 @@ class ReadOnlyRunTest {
         )
         for (frame in frames) {
             val platform = FakePlatform()
-            ReadOnlyRun(platform).start()
+            SingleFertilizationRun(platform).start()
             platform.advance(200)
             platform.reply(frame)
             assertNull(platform.state.recognition)
@@ -339,7 +341,7 @@ class ReadOnlyRunTest {
 
     @Test fun permissionLossDuringOcrOverridesSuccessfulEvidence() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.problem = "当前不是支付宝前台页面"
         platform.reply(farm())
@@ -349,7 +351,7 @@ class ReadOnlyRunTest {
 
     @Test fun interruptionStopsAndOldOcrCannotAffectNewRun() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(200)
         val oldReply = platform.requests.removeAt(0)
@@ -364,9 +366,137 @@ class ReadOnlyRunTest {
         assertEquals(1, platform.taps.size)
     }
 
+    @Test fun contentEventAtDispatchBoundaryStopsEvenWhenAccessibleSnapshotIsUnchanged() {
+        val platform = FakePlatform()
+        val run = SingleFertilizationRun(platform)
+        run.start()
+        platform.advance(200)
+        platform.onShow = { view -> if (view.running) run.onPageChanged(1) }
+        platform.reply(farm())
+        assertTrue(platform.taps.isEmpty())
+        assertEquals("已停止：识别期间页面发生变化；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
+    }
+
+    @Test fun pageChangeAfterRecognitionBeforeDispatchNeverUsesRecognizedCoordinates() {
+        val platform = FakePlatform()
+        val run = SingleFertilizationRun(platform)
+        run.start()
+        platform.advance(200)
+        platform.onShow = { view ->
+            if (view.running) platform.page = platform.page!!.copy(windowId = 2)
+        }
+        platform.reply(farm())
+        assertTrue(platform.taps.isEmpty())
+        assertEquals("已停止：识别期间页面发生变化；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
+    }
+
+    @Test fun overlayEventsAndPreCaptureChangesDoNotInvalidateFreshFarmRecognition() {
+        val platform = FakePlatform()
+        val run = SingleFertilizationRun(platform)
+        run.start()
+        run.onPageChanged(1)
+        platform.advance(200)
+        run.onVolumeKey(VolumeKey.UP, true)
+        run.resume()
+        run.onPageChanged(1)
+        assertTrue(platform.state.running)
+        platform.advance(200)
+        run.onPageChanged(99)
+        assertTrue(platform.state.running)
+        val oldReply = platform.requests.removeAt(0)
+        oldReply(Result.success(farm()))
+        platform.reply(farm())
+        assertEquals(1, platform.taps.size)
+        // The expected post-tap change occurs before the fresh confirmation capture.
+        run.onPageChanged(1)
+        platform.advance(500)
+        run.onPageChanged(99)
+        platform.reply(farm(1100))
+        assertEquals("施肥成功：肥料余额 1200 → 1100", platform.state.message)
+        assertEquals(1, platform.taps.size)
+    }
+
+    @Test fun contentEventInvalidatesInFlightOcrEvenWhenNodesAndAppWindowStayTheSame() {
+        for (afterAttempt in listOf(false, true)) {
+            val platform = FakePlatform()
+            val run = SingleFertilizationRun(platform)
+            run.start()
+            platform.advance(200)
+            if (afterAttempt) {
+                platform.reply(farm())
+                platform.advance(500)
+            }
+            val oldReply = platform.requests.removeAt(0)
+            run.onPageChanged(1)
+            val stopped = platform.state
+            assertFalse(stopped.running)
+            assertTrue(stopped.overlayVisible)
+            assertEquals(if (afterAttempt) "已停止：识别期间页面发生变化；施肥结果未确认"
+                else "已停止：识别期间页面发生变化；未发起施肥尝试", stopped.message)
+            assertFalse(platform.captureGuards.last()())
+            oldReply(Result.success(farm(1100)))
+            platform.advance(20_000)
+            assertEquals(stopped, platform.state)
+            assertEquals(if (afterAttempt) 1 else 0, platform.taps.size)
+        }
+    }
+
+    @Test fun sameWindowContentChangeDuringOcrStopsBeforeOldCoordinatesCanDispatch() {
+        val platform = FakePlatform()
+        val run = SingleFertilizationRun(platform)
+        run.start()
+        platform.advance(200)
+        val oldReply = platform.requests.removeAt(0)
+        platform.page = platform.page!!.copy(nodes = platform.page!!.nodes +
+            PageNode("温馨提示", Bounds(100, 400, 400, 450)))
+        oldReply(Result.success(farm()))
+        assertTrue(platform.taps.isEmpty())
+        assertEquals("已停止：识别期间页面发生变化；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
+        run.resume()
+        platform.advance(20_000)
+        oldReply(Result.success(farm()))
+        assertTrue(platform.taps.isEmpty())
+    }
+
+    @Test fun inaccessibleOrDialogSemanticsNeverPermitOcrOnlyFarmTap() {
+        val normal = FakePlatform().page!!
+        for (page in listOf(null, normal.copy(nodes = emptyList()),
+            normal.copy(nodes = normal.nodes + PageNode("", Bounds(0, 0, 720, 1280), className = "android.app.Dialog")),
+            normal.copy(nodes = normal.nodes + PageNode("", Bounds(0, 0, 720, 1280), paneTitle = "提示")),
+            normal.copy(nodes = normal.nodes + PageNode("继续", Bounds(100, 400, 200, 450), clickable = true)),
+            normal.copy(nodes = normal.nodes + PageNode("温馨提示", Bounds(100, 400, 200, 450))))) {
+            val platform = FakePlatform().apply { this.page = page }
+            SingleFertilizationRun(platform).start()
+            platform.advance(200)
+            platform.reply(farm())
+            assertTrue(platform.taps.isEmpty())
+            assertEquals("已停止：无法确认可访问农场页面，或存在弹窗；未发起施肥尝试", platform.state.message)
+            assertTrue(platform.state.overlayVisible)
+        }
+    }
+
+    @Test fun unknownSameWindowPromptOverridesValidFarmWithoutClosingIt() {
+        val platform = FakePlatform()
+        SingleFertilizationRun(platform).start()
+        platform.advance(200)
+        platform.reply(farm().copy(lines = farm().lines + listOf(
+            OcrLine("温馨提示", Bounds(100, 400, 400, 450)),
+            OcrLine("取消", Bounds(100, 500, 200, 550)),
+            OcrLine("确定", Bounds(300, 500, 400, 550)),
+        )))
+        assertTrue(platform.taps.isEmpty())
+        assertEquals("已停止：页面存在未确认内容或弹窗；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
+        platform.advance(20_000)
+        assertTrue(platform.taps.isEmpty())
+    }
+
     @Test fun rewardPopupOverridesOtherwiseValidFarmEvidence() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.reply(farm().copy(lines = farm().lines + OcrLine("恭喜获得", Bounds(10, 400, 300, 450))))
         assertNull(platform.state.recognition)
@@ -375,7 +505,7 @@ class ReadOnlyRunTest {
 
     @Test fun unsupportedScreenshotCapabilityReportsSpecificBlocker() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.requests.removeAt(0)(Result.failure(PlatformFailure("当前显示器不支持无障碍截图（错误码4）")))
         assertEquals("已停止：当前显示器不支持无障碍截图（错误码4）；未发起施肥尝试", platform.state.message)
@@ -383,7 +513,7 @@ class ReadOnlyRunTest {
 
     @Test fun secondManualRunReplacesPreviousNecessaryResult() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         run.start()
         platform.advance(200)
@@ -402,7 +532,7 @@ class ReadOnlyRunTest {
 
     @Test fun duplicateFarmTitlesDoNotConfirmThePage() {
         val platform = FakePlatform()
-        ReadOnlyRun(platform).start()
+        SingleFertilizationRun(platform).start()
         platform.advance(200)
         platform.reply(farm().copy(lines = farm().lines + farm().lines.first()))
         assertNull(platform.state.recognition)
@@ -411,7 +541,7 @@ class ReadOnlyRunTest {
 
     @Test fun volumeUpPausesUntilOverlayContinueAndReconfirmsWithRemainingTime() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(4_000)
         val oldReply = platform.requests.removeAt(0)
@@ -448,7 +578,7 @@ class ReadOnlyRunTest {
 
     @Test fun interruptionWhilePausedDiscardsRunAndCannotResume() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         run.onVolumeKey(VolumeKey.UP, true)
         run.stop("无障碍服务中断")
@@ -463,7 +593,7 @@ class ReadOnlyRunTest {
 
     @Test fun lateScreenshotCannotStartOcrAfterPauseResumeOrNewRun() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(200)
         val oldCaptureIsCurrent = platform.captureGuards.single()
@@ -483,7 +613,7 @@ class ReadOnlyRunTest {
 
     @Test fun pauseFreezesOnlyPausedTimeAndRepeatedPausesKeepRemainingBudget() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         platform.advance(4_000)
         run.onVolumeKey(VolumeKey.UP, true)
@@ -506,7 +636,7 @@ class ReadOnlyRunTest {
     @Test fun endFromVolumeDownRestoresControlsAndRequiresExplicitNewStart() {
         for (paused in listOf(false, true)) {
             val platform = FakePlatform()
-            val run = ReadOnlyRun(platform)
+            val run = SingleFertilizationRun(platform)
             assertFalse(run.onVolumeKey(VolumeKey.DOWN, true))
             assertFalse(run.onVolumeKey(VolumeKey.DOWN, false))
             run.start()
@@ -540,7 +670,7 @@ class ReadOnlyRunTest {
 
     @Test fun overlayEndWhilePausedInvalidatesPendingCapture() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         run.onVolumeKey(VolumeKey.UP, true)
         run.end()
@@ -553,7 +683,7 @@ class ReadOnlyRunTest {
 
     @Test fun heldKeysDoNotStartResumeOrStopAnotherRunAndKeepEventStreamsPaired() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         assertFalse(run.onVolumeKey(VolumeKey.UP, true))
         run.start()
         assertFalse(run.onVolumeKey(VolumeKey.UP, true, repeatCount = 4))
@@ -577,7 +707,7 @@ class ReadOnlyRunTest {
 
     @Test fun resumeRechecksPlatformBeforeTakingAnotherScreenshot() {
         val platform = FakePlatform()
-        val run = ReadOnlyRun(platform)
+        val run = SingleFertilizationRun(platform)
         run.start()
         run.onVolumeKey(VolumeKey.UP, true)
         platform.problem = "当前不是支付宝前台页面"
@@ -595,9 +725,15 @@ class ReadOnlyRunTest {
     ))
 }
 
-private class FakePlatform : ReadOnlyPlatform {
+private class FakePlatform : SingleFertilizationPlatform {
     var time = 0L
     var problem: String? = null
+    var page: PageEvidence? = PageEvidence(1, listOf(
+        PageNode("芭芭农场", Bounds(20, 100, 220, 150)),
+        PageNode("肥料", Bounds(250, 820, 450, 860)),
+        PageNode("施肥", Bounds(0, 0, 720, 1280), clickable = true),
+    ))
+    override fun pageEvidence() = page
     var state = RunView()
     var screenshots = 0
     val taps = mutableListOf<Bounds>()
@@ -618,7 +754,7 @@ private class FakePlatform : ReadOnlyPlatform {
         requests += callback
     }
     override fun tap(button: Bounds, callback: (Boolean) -> Unit): Boolean {
-        taps += button
+        if (acceptsGesture) taps += button
         gestureReplies += callback
         gestureError?.let { throw it }
         return acceptsGesture

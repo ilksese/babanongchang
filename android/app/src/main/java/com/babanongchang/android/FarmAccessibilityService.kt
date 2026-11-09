@@ -9,6 +9,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Path
+import android.graphics.Rect
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -28,7 +29,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 
-class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
+class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlatform {
     companion object {
         const val ALIPAY_PACKAGE = "com.eg.android.AlipayGphone"
         var connected: FarmAccessibilityService? = null
@@ -40,7 +41,7 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
     }
 
     private val handler = Handler(Looper.getMainLooper())
-    private val run = ReadOnlyRun(this)
+    private val run = SingleFertilizationRun(this)
     private val recognizer by lazy {
         TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     }
@@ -86,6 +87,29 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
         val appWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
         if (appWindows.size != 1) return "存在多个应用窗口或弹窗，无法确认页面"
         return null
+    }
+
+    override fun pageEvidence(): PageEvidence? {
+        val root = rootInActiveWindow ?: return null
+        val nodes = mutableListOf<PageNode>()
+        fun visit(node: android.view.accessibility.AccessibilityNodeInfo) {
+            if (!node.isVisibleToUser) return
+            val rect = Rect()
+            node.getBoundsInScreen(rect)
+            nodes += PageNode(
+                listOfNotNull(node.text, node.contentDescription).joinToString(" "),
+                Bounds(rect.left, rect.top, rect.right, rect.bottom),
+                node.className?.toString().orEmpty(), node.paneTitle?.toString(), node.isClickable,
+            )
+            for (index in 0 until node.childCount) node.getChild(index)?.let { child ->
+                try { visit(child) } finally { child.recycle() }
+            }
+        }
+        return try {
+            if (root.packageName?.toString() != ALIPAY_PACKAGE) return null
+            visit(root)
+            PageEvidence(root.windowId, nodes)
+        } finally { root.recycle() }
     }
 
     override fun schedule(delayMillis: Long, action: () -> Unit) {
@@ -260,28 +284,37 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (run.view.running || run.view.paused) unavailableReason()?.let { run.stop(it) }
+        if (!run.view.running && !run.view.paused) return
+        val problem = unavailableReason()
+        if (problem != null) {
+            run.stop(problem)
+            return
+        }
+        if (event != null &&
+            (event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ||
+                event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+        ) run.onPageChanged(event.windowId)
     }
 
     override fun onInterrupt() {
         run.stop("无障碍服务中断")
     }
 
-    override fun onUnbind(intent: Intent?): Boolean {
+    private fun disconnect() {
         alive = false
-        connected = null
+        if (connected === this) connected = null
         run.stop("无障碍服务断开")
         handler.removeCallbacksAndMessages(null)
         removeOverlay()
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        disconnect()
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
-        alive = false
-        connected = null
-        run.stop("无障碍服务断开")
-        handler.removeCallbacksAndMessages(null)
-        removeOverlay()
+        disconnect()
         recognizer.close()
         super.onDestroy()
     }
