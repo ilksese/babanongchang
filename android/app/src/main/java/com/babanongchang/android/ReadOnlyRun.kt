@@ -36,6 +36,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
     private var deadline = 0L
     private var remainingMillis = 10_000L
     private var baseline: Long? = null
+    private var attemptDispatched = false
     private val heldKeys = mutableMapOf<VolumeKey, Boolean>()
 
     fun onVolumeKey(key: VolumeKey, down: Boolean, repeatCount: Int = 0): Boolean {
@@ -52,6 +53,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
     fun start() {
         if (view.running || view.paused) return
         baseline = null
+        attemptDispatched = false
         remainingMillis = 10_000
         beginRecognition()
     }
@@ -84,7 +86,9 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
         platform.show(view)
         deadline = platform.nowMillis() + remainingMillis
         platform.schedule(remainingMillis) {
-            if (active(token)) timeout()
+            if (active(token)) {
+                platform.unavailableReason()?.let { stop(it) } ?: timeout()
+            }
         }
         // Allow the accessibility overlay removal to reach the display before capturing.
         platform.schedule(if (baseline == null) 200 else 500) { if (active(token)) capture(token) }
@@ -162,6 +166,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
                         if (active(gestureToken) && !completed) gestureFailed()
                     }
                 } catch (_: Exception) { false }
+                if (active(gestureToken) && accepted) attemptDispatched = true
                 if (active(gestureToken) && !accepted) gestureFailed()
             } else if (balance < before) {
                 finish("施肥成功：肥料余额 $before → $balance")
@@ -177,7 +182,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
 
     private fun gestureFailed() = finish("结果未确认：施肥手势未能完成；不自动补点")
 
-    private fun attemptStatus() = if (baseline == null) "未发起施肥尝试" else "施肥结果未确认"
+    private fun attemptStatus() = if (attemptDispatched) "施肥结果未确认" else "未发起施肥尝试"
 
     private fun timeout() {
         finish(if (baseline == null) "已停止：点击前识别超时（10秒）；未发起施肥尝试"

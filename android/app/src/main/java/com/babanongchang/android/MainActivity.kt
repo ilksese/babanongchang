@@ -57,6 +57,8 @@ class MainActivity : Activity() {
         val enabled = Settings.Secure.getString(contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
             ?.split(':')?.any { it.equals(name, ignoreCase = true) } == true
         status.text = when {
+            FarmAccessibilityService.overlayFailure != null ->
+                "${FarmAccessibilityService.overlayFailure}；请在本界面查看最近状态：${FarmAccessibilityService.lastMessage ?: "未记录"}"
             FarmAccessibilityService.connected != null -> "权限状态：无障碍服务已连接；从农场浮层手动开始"
             enabled -> "权限状态：系统已启用，服务尚未连接；请等待或检查系统设置"
             else -> "权限状态：无障碍服务未授权；不会启动截图或识别"

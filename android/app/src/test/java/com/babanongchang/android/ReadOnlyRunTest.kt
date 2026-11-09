@@ -218,6 +218,26 @@ class ReadOnlyRunTest {
         assertTrue(platform.taps.isEmpty())
         assertTrue(platform.state.overlayVisible)
         assertFalse(platform.state.running)
+        assertTrue(platform.state.message.contains("未发起施肥尝试"))
+        assertFalse(platform.state.message.contains("结果未确认"))
+    }
+
+    @Test fun permissionLossAfterValidRecognitionBeforeDispatchStillReportsNoAttempt() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        platform.onShow = { view ->
+            if (view.running && platform.screenshots == 1) {
+                platform.problem = "无障碍手势能力不可用"
+            }
+        }
+
+        run.start()
+        platform.advance(200)
+        platform.reply(farm(1200))
+
+        assertTrue(platform.taps.isEmpty())
+        assertEquals("已停止：无障碍手势能力不可用；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
     }
 
     @Test fun postAttemptResumePreservesOriginalBaselineAndIgnoresOldGestureFailure() {
@@ -256,6 +276,27 @@ class ReadOnlyRunTest {
         assertEquals("已停止：点击前识别超时（10秒）；未发起施肥尝试", platform.state.message)
         platform.reply(farm())
         assertNull(platform.state.recognition)
+    }
+
+    @Test fun environmentLossAtPhaseDeadlineStopsWithSpecificReasonBeforeTimeout() {
+        val beforeAttempt = FakePlatform()
+        ReadOnlyRun(beforeAttempt).start()
+        beforeAttempt.advance(9_999)
+        beforeAttempt.problem = "屏幕已关闭或锁定"
+        beforeAttempt.advance(1)
+        assertEquals("已停止：屏幕已关闭或锁定；未发起施肥尝试", beforeAttempt.state.message)
+        assertTrue(beforeAttempt.taps.isEmpty())
+
+        val afterAttempt = FakePlatform()
+        val run = ReadOnlyRun(afterAttempt)
+        run.start()
+        afterAttempt.advance(200)
+        afterAttempt.reply(farm(1200))
+        afterAttempt.advance(9_499)
+        afterAttempt.problem = "当前不是支付宝前台页面"
+        afterAttempt.advance(501)
+        assertEquals("已停止：当前不是支付宝前台页面；施肥结果未确认", afterAttempt.state.message)
+        assertEquals(1, afterAttempt.taps.size)
     }
 
     @Test fun wrongPageStopsWithoutClaimingRecognition() {

@@ -33,6 +33,10 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
         const val ALIPAY_PACKAGE = "com.eg.android.AlipayGphone"
         var connected: FarmAccessibilityService? = null
             private set
+        var lastMessage: String? = null
+            private set
+        var overlayFailure: String? = null
+            private set
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -89,6 +93,7 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
     }
 
     override fun show(view: RunView) {
+        lastMessage = view.message
         removeOverlay()
         if (!alive || !view.overlayVisible) return
         val layout = LinearLayout(this).apply {
@@ -120,12 +125,25 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
             gravity = Gravity.TOP or Gravity.END
             y = (48 * resources.displayMetrics.density).toInt()
         }
-        getSystemService(WindowManager::class.java).addView(layout, params)
-        overlay = layout
+        try {
+            getSystemService(WindowManager::class.java).addView(layout, params)
+            overlay = layout
+            overlayFailure = null
+        } catch (error: RuntimeException) {
+            overlay = null
+            overlayFailure = "控制浮层不可用：${error.javaClass.simpleName}"
+            lastMessage = "${view.message}；$overlayFailure"
+        }
     }
 
     private fun removeOverlay() {
-        overlay?.let { getSystemService(WindowManager::class.java).removeView(it) }
+        overlay?.let {
+            try {
+                getSystemService(WindowManager::class.java).removeView(it)
+            } catch (error: RuntimeException) {
+                overlayFailure = "控制浮层不可用：${error.javaClass.simpleName}"
+            }
+        }
         overlay = null
     }
 
