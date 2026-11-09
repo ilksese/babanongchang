@@ -25,8 +25,9 @@ class MainActivity : Activity() {
             setPadding(0, 12, 0, 12)
             layout.addView(this)
         }
-        text("芭芭农场 · 只读能力验证（非正式可用版）")
-        text("本应用使用无障碍截图在本机识别支付宝农场、肥料余额和施肥按钮，并提供小型无障碍控制浮层。本版本不会发送点击或其他手势。")
+        text("芭芭农场 · 单次施肥验证（非正式可用版）")
+        text("本应用在本机识别支付宝农场、肥料余额和施肥按钮。每次手动开始，在余额大于 600 且页面明确时最多尝试施肥一次，可能消耗真实肥料；余额不大于 600 时未执行。真实施肥前须另行明确授权。")
+        text("点击前识别与点击后确认各最多等待 10 秒活跃时间；只有有效农场上的余额减少才报告施肥成功。手势完成不代表成功，结果未确认绝不自动补点。暂停不消耗等待额度；点击后继续只确认原结果，结束显示施肥结果未确认。")
         text("截图仅驻留内存，用完释放；中文模型随 APK 打包，无需联网。无截图存档、网络权限或历史日志，仅保留当前进程最近一轮必要结果。")
         text("请自行登录支付宝、解锁并保持亮屏，手动进入芭芭农场。识别期间不要操作手机。需要 Android 11+ 无障碍截图能力，目标手机尚未验证；能力不可用时停止，不采用其他权限路线。")
         text("运行中音量上暂停、音量下结束并恢复浮层；暂停后只能点击浮层继续，也可点击结束。暂停不再截图或启动识别，结束不退出 APK，重新开始必须手动点击。未运行时音量键正常调节音量。")
@@ -38,7 +39,7 @@ class MainActivity : Activity() {
             setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
         })
         layout.addView(Button(this).apply {
-            text = "显示只读控制浮层"
+            text = "显示单次验证控制浮层"
             setOnClickListener {
                 val service = FarmAccessibilityService.connected
                 if (service == null) status.text = "服务未连接，请先在系统设置中启用无障碍服务"

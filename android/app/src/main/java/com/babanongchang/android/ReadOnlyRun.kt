@@ -12,7 +12,7 @@ data class RunView(
     val running: Boolean = false,
     val paused: Boolean = false,
     val overlayVisible: Boolean = true,
-    val message: String = "只读验证：请手动进入支付宝芭芭农场",
+    val message: String = "单次施肥验证（非正式可用版）：请手动进入支付宝芭芭农场",
     val recognition: FarmRecognition? = null,
 )
 
@@ -24,6 +24,8 @@ interface ReadOnlyPlatform {
     fun schedule(delayMillis: Long, action: () -> Unit)
     /** Check isCurrent before every async continuation, especially before starting OCR. */
     fun captureAndRecognize(isCurrent: () -> Boolean, callback: (Result<OcrFrame>) -> Unit)
+    /** One dispatch only; completion is not evidence that fertilizer was consumed. */
+    fun tap(button: Bounds, callback: (Boolean) -> Unit): Boolean
 }
 
 class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
@@ -33,6 +35,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
     private var generation = 0L
     private var deadline = 0L
     private var remainingMillis = 10_000L
+    private var baseline: Long? = null
     private val heldKeys = mutableMapOf<VolumeKey, Boolean>()
 
     fun onVolumeKey(key: VolumeKey, down: Boolean, repeatCount: Int = 0): Boolean {
@@ -48,6 +51,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
 
     fun start() {
         if (view.running || view.paused) return
+        baseline = null
         remainingMillis = 10_000
         beginRecognition()
     }
@@ -57,14 +61,14 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
     }
 
     fun end() {
-        if (view.running || view.paused) finish("已结束；未发起施肥尝试")
+        if (view.running || view.paused) finish(if (baseline == null) "已结束；未发起施肥尝试" else "已结束，施肥结果未确认")
     }
 
     private fun pause() {
         if (!view.running) return
         remainingMillis = (deadline - platform.nowMillis()).coerceAtLeast(0)
         generation++
-        view = RunView(paused = true, message = "已暂停：请通过浮层继续或结束；未发起施肥尝试")
+        view = RunView(paused = true, message = "已暂停：请通过浮层继续或结束；${attemptStatus()}")
         platform.show(view)
     }
 
@@ -72,76 +76,112 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
         val token = ++generation
         val problem = platform.unavailableReason()
         if (problem != null) {
-            view = RunView(message = "已停止：$problem；未发起施肥尝试")
-            platform.show(view)
+            finish("已停止：$problem；${attemptStatus()}")
             return
         }
-        view = RunView(running = true, overlayVisible = false, message = "正在只读识别")
+        view = RunView(running = true, overlayVisible = false,
+            message = if (baseline == null) "正在确认施肥条件" else "正在确认原施肥尝试的结果")
         platform.show(view)
         deadline = platform.nowMillis() + remainingMillis
         platform.schedule(remainingMillis) {
-            if (active(token)) finish("已停止：只读识别超时（10秒）；未发起施肥尝试")
+            if (active(token)) timeout()
         }
         // Allow the accessibility overlay removal to reach the display before capturing.
-        platform.schedule(200) {
-            if (!active(token)) return@schedule
+        platform.schedule(if (baseline == null) 200 else 500) { if (active(token)) capture(token) }
+    }
+
+    private fun capture(token: Long) {
+        if (!active(token)) return
+        val problem = platform.unavailableReason()
+        if (problem != null) {
+            stop(problem)
+            return
+        }
+        var delivered = false
+        platform.captureAndRecognize({ active(token) && !delivered && platform.nowMillis() < deadline }) { result ->
+            if (!active(token) || delivered) return@captureAndRecognize
+            delivered = true
             val problem = platform.unavailableReason()
             if (problem != null) {
-                finish("已停止：$problem；未发起施肥尝试")
-                return@schedule
+                stop(problem)
+                return@captureAndRecognize
             }
-            platform.captureAndRecognize({ active(token) && platform.nowMillis() < deadline }) { result ->
-                if (!active(token)) return@captureAndRecognize
-                val problem = platform.unavailableReason()
-                if (problem != null) {
-                    finish("已停止：$problem；未发起施肥尝试")
+            if (platform.nowMillis() >= deadline) {
+                timeout()
+                return@captureAndRecognize
+            }
+            val frame = result.getOrNull()
+            if (frame == null) {
+                val reason = (result.exceptionOrNull() as? PlatformFailure)?.userReason
+                    ?: "截图或中文识别失败"
+                stop(reason)
+                return@captureAndRecognize
+            }
+            if (frame.lines.any { line ->
+                    listOf("恭喜", "奖励", "立即领取", "开心收下", "做任务集肥料", "做任务领肥料")
+                        .any { it in line.text }
+                }) {
+                stop("发现弹窗或任务页面")
+                return@captureAndRecognize
+            }
+            if (frame.lines.count { it.text.replace(Regex("\\s+"), "") == "芭芭农场" } != 1) {
+                stop("无法确认芭芭农场页面")
+                return@captureAndRecognize
+            }
+            val lines = frame.lines.map { it.copy(text = it.text.replace(Regex("\\s+"), "")) }
+            val balanceLabels = lines.filter { it.text.startsWith("肥料") }
+            val balance = balanceLabels.singleOrNull()?.text
+                ?.let { Regex("肥料[：:]?([0-9]+)").matchEntire(it)?.groupValues?.get(1)?.toLongOrNull() }
+            val button = lines.filter { it.text == "施肥" }.singleOrNull()?.bounds
+            if (balance == null || (baseline == null && (button == null ||
+                button.left < 0 || button.top < 0 || button.right > frame.width ||
+                button.bottom > frame.height || button.left >= button.right || button.top >= button.bottom))
+            ) {
+                stop("肥料余额或施肥按钮无法唯一确认")
+                return@captureAndRecognize
+            }
+            val before = baseline
+            if (before == null) {
+                if (balance <= 600) {
+                    finish("未执行：肥料余额 $balance 不大于保护阈值 600；未发起施肥尝试")
                     return@captureAndRecognize
                 }
-                if (platform.nowMillis() >= deadline) {
-                    finish("已停止：只读识别超时（10秒）；未发起施肥尝试")
+                baseline = balance
+                remainingMillis = 10_000
+                beginRecognition()
+                val gestureToken = generation
+                if (!active(gestureToken)) return@captureAndRecognize
+                val dispatchProblem = platform.unavailableReason()
+                if (dispatchProblem != null) {
+                    baseline = null
+                    stop(dispatchProblem)
                     return@captureAndRecognize
                 }
-                val frame = result.getOrNull()
-                if (frame == null) {
-                    val reason = (result.exceptionOrNull() as? PlatformFailure)?.userReason
-                        ?: "截图或中文识别失败"
-                    finish("已停止：$reason；未发起施肥尝试")
-                    return@captureAndRecognize
-                }
-                if (frame.lines.any { line ->
-                        listOf("恭喜", "奖励", "立即领取", "开心收下", "做任务集肥料", "做任务领肥料")
-                            .any { it in line.text }
-                    }) {
-                    finish("已停止：发现弹窗或任务页面；未发起施肥尝试")
-                    return@captureAndRecognize
-                }
-                if (frame.lines.count { it.text.replace(Regex("\\s+"), "") == "芭芭农场" } != 1) {
-                    finish("已停止：无法确认芭芭农场页面；未发起施肥尝试")
-                    return@captureAndRecognize
-                }
-                val lines = frame.lines.map { it.copy(text = it.text.replace(Regex("\\s+"), "")) }
-                val balanceLabels = lines.filter { it.text.startsWith("肥料") }
-                val balance = balanceLabels.singleOrNull()?.text
-                    ?.let { Regex("肥料[：:]?([0-9]+)").matchEntire(it)?.groupValues?.get(1)?.toLongOrNull() }
-                val button = lines.filter { it.text == "施肥" }.singleOrNull()?.bounds
-                if (balance == null || button == null ||
-                    button.left < 0 || button.top < 0 || button.right > frame.width ||
-                    button.bottom > frame.height || button.left >= button.right || button.top >= button.bottom
-                ) {
-                    finish("已停止：肥料余额或施肥按钮无法唯一确认；未发起施肥尝试")
-                    return@captureAndRecognize
-                }
-                view = RunView(
-                    message = "只读识别完成：农场已确认，肥料余额 $balance，施肥按钮已定位；未发起施肥尝试",
-                    recognition = FarmRecognition(balance, button),
-                )
-                platform.show(view)
+                val accepted = try {
+                    platform.tap(requireNotNull(button)) { completed ->
+                        if (active(gestureToken) && !completed) gestureFailed()
+                    }
+                } catch (_: Exception) { false }
+                if (active(gestureToken) && !accepted) gestureFailed()
+            } else if (balance < before) {
+                finish("施肥成功：肥料余额 $before → $balance")
+            } else {
+                platform.schedule(500) { if (active(token)) capture(token) }
             }
         }
     }
 
     fun stop(reason: String) {
-        if (view.running || view.paused) finish("已停止：$reason；未发起施肥尝试")
+        if (view.running || view.paused) finish("已停止：$reason；${attemptStatus()}")
+    }
+
+    private fun gestureFailed() = finish("结果未确认：施肥手势未能完成；不自动补点")
+
+    private fun attemptStatus() = if (baseline == null) "未发起施肥尝试" else "施肥结果未确认"
+
+    private fun timeout() {
+        finish(if (baseline == null) "已停止：点击前识别超时（10秒）；未发起施肥尝试"
+            else "结果未确认：确认肥料余额减少超时（10秒）；不自动补点")
     }
 
     private fun active(token: Long) = view.running && token == generation

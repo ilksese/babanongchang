@@ -2,11 +2,13 @@ package com.babanongchang.android
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
@@ -41,6 +43,7 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
     private var overlay: View? = null
     private var alive = false
     private var recognizing = false
+    private var lastScreenshotMillis = -500L
 
     override fun onServiceConnected() {
         alive = true
@@ -58,6 +61,9 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
         if (!alive) return "无障碍服务未连接"
         if (serviceInfo.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT == 0) {
             return "系统未提供无障碍截图能力（需要 Android 11+）"
+        }
+        if (serviceInfo.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_PERFORM_GESTURES == 0) {
+            return "系统未提供无障碍手势能力"
         }
         if (serviceInfo.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS == 0 ||
             serviceInfo.flags and AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS == 0
@@ -97,7 +103,7 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
             maxLines = 5
         })
         layout.addView(Button(this).apply {
-            text = if (view.paused) "继续" else "开始只读识别"
+            text = if (view.paused) "继续" else "开始单次施肥验证"
             setOnClickListener { if (view.paused) run.resume() else run.start() }
         })
         if (view.paused) layout.addView(Button(this).apply {
@@ -130,7 +136,13 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
             schedule(200) { captureAndRecognize(isCurrent, callback) }
             return
         }
+        val waitMillis = 500 - (nowMillis() - lastScreenshotMillis)
+        if (waitMillis > 0) {
+            schedule(waitMillis) { captureAndRecognize(isCurrent, callback) }
+            return
+        }
         recognizing = true
+        lastScreenshotMillis = nowMillis()
         try {
             takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
                 override fun onFailure(errorCode: Int) {
@@ -203,6 +215,20 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
             recognizing = false
             callback(Result.failure(error))
         }
+    }
+
+    override fun tap(button: Bounds, callback: (Boolean) -> Unit): Boolean {
+        if (unavailableReason() != null) return false
+        val path = Path().apply {
+            moveTo((button.left + button.right) / 2f, (button.top + button.bottom) / 2f)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(path, 0, 50))
+            .build()
+        return dispatchGesture(gesture, object : GestureResultCallback() {
+            override fun onCompleted(gestureDescription: GestureDescription) { callback(true) }
+            override fun onCancelled(gestureDescription: GestureDescription) { callback(false) }
+        }, handler)
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
