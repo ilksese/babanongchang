@@ -147,6 +147,182 @@ class ReadOnlyRunTest {
         assertEquals("已停止：无法确认芭芭农场页面；未发起施肥尝试", platform.state.message)
     }
 
+    @Test fun volumeUpPausesUntilOverlayContinueAndReconfirmsWithRemainingTime() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        run.start()
+        platform.advance(4_000)
+        val oldReply = platform.requests.removeAt(0)
+
+        assertTrue(run.onVolumeKey(VolumeKey.UP, true))
+        assertTrue(platform.state.paused)
+        assertTrue(platform.state.overlayVisible)
+        assertFalse(platform.state.running)
+        platform.advance(30_000)
+        oldReply(Result.success(farm()))
+        assertNull(platform.state.recognition)
+        assertEquals(1, platform.screenshots)
+        run.start()
+        assertTrue(platform.state.paused)
+        assertTrue(run.onVolumeKey(VolumeKey.UP, true, repeatCount = 5))
+        assertTrue(run.onVolumeKey(VolumeKey.UP, false))
+        assertTrue(run.onVolumeKey(VolumeKey.UP, true))
+        assertTrue(run.onVolumeKey(VolumeKey.UP, false))
+        assertTrue(platform.state.paused)
+
+        run.resume()
+        oldReply(Result.success(farm()))
+        assertTrue(platform.state.running)
+        assertNull(platform.state.recognition)
+        assertFalse(platform.state.overlayVisible)
+        platform.advance(200)
+        assertEquals(2, platform.screenshots)
+        platform.reply(farm().copy(lines = farm().lines.map {
+            if (it.text == "施肥") it.copy(bounds = Bounds(40, 500, 100, 560)) else it
+        }))
+        assertEquals(FarmRecognition(1200, Bounds(40, 500, 100, 560)), platform.state.recognition)
+    }
+
+    @Test fun interruptionWhilePausedDiscardsRunAndCannotResume() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        run.start()
+        run.onVolumeKey(VolumeKey.UP, true)
+        run.stop("无障碍服务中断")
+        run.resume()
+        platform.advance(30_000)
+        assertFalse(platform.state.paused)
+        assertFalse(platform.state.running)
+        assertTrue(platform.state.overlayVisible)
+        assertEquals(0, platform.screenshots)
+        assertEquals("已停止：无障碍服务中断；未发起施肥尝试", platform.state.message)
+    }
+
+    @Test fun lateScreenshotCannotStartOcrAfterPauseResumeOrNewRun() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        run.start()
+        platform.advance(200)
+        val oldCaptureIsCurrent = platform.captureGuards.single()
+        assertTrue(oldCaptureIsCurrent())
+        run.onVolumeKey(VolumeKey.UP, true)
+        assertFalse(oldCaptureIsCurrent())
+        run.resume()
+        assertFalse(oldCaptureIsCurrent())
+        platform.advance(200)
+        val resumedCaptureIsCurrent = platform.captureGuards.last()
+        assertTrue(resumedCaptureIsCurrent())
+        run.end()
+        run.start()
+        assertFalse(resumedCaptureIsCurrent())
+        assertFalse(oldCaptureIsCurrent())
+    }
+
+    @Test fun pauseFreezesOnlyPausedTimeAndRepeatedPausesKeepRemainingBudget() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        run.start()
+        platform.advance(4_000)
+        run.onVolumeKey(VolumeKey.UP, true)
+        run.onVolumeKey(VolumeKey.UP, false)
+        platform.advance(30_000)
+        run.resume()
+        platform.advance(3_000)
+        run.onVolumeKey(VolumeKey.UP, true)
+        run.onVolumeKey(VolumeKey.UP, false)
+        platform.advance(30_000)
+        run.resume()
+        platform.advance(2_999)
+        assertTrue(platform.state.running)
+        platform.advance(1)
+        assertEquals("已停止：只读识别超时（10秒）；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
+        assertFalse(platform.state.paused)
+    }
+
+    @Test fun endFromVolumeDownRestoresControlsAndRequiresExplicitNewStart() {
+        for (paused in listOf(false, true)) {
+            val platform = FakePlatform()
+            val run = ReadOnlyRun(platform)
+            assertFalse(run.onVolumeKey(VolumeKey.DOWN, true))
+            assertFalse(run.onVolumeKey(VolumeKey.DOWN, false))
+            run.start()
+            platform.advance(200)
+            val oldReply = platform.requests.removeAt(0)
+            if (paused) run.onVolumeKey(VolumeKey.UP, true)
+            assertTrue(run.onVolumeKey(VolumeKey.DOWN, true))
+            val ended = platform.state
+            assertEquals("已结束；未发起施肥尝试", ended.message)
+            assertTrue(ended.overlayVisible)
+            assertFalse(ended.running)
+            assertFalse(ended.paused)
+            assertTrue(run.onVolumeKey(VolumeKey.DOWN, true, repeatCount = 8))
+            assertTrue(run.onVolumeKey(VolumeKey.DOWN, false))
+            assertFalse(run.onVolumeKey(VolumeKey.DOWN, true))
+            assertFalse(run.onVolumeKey(VolumeKey.DOWN, false))
+            run.resume()
+            platform.advance(30_000)
+            oldReply(Result.success(farm()))
+            assertEquals(ended, platform.state)
+            assertEquals(1, platform.screenshots)
+            run.start()
+            oldReply(Result.success(farm()))
+            assertTrue(platform.state.running)
+            assertNull(platform.state.recognition)
+            platform.advance(200)
+            platform.reply(farm())
+            assertNotNull(platform.state.recognition)
+        }
+    }
+
+    @Test fun overlayEndWhilePausedInvalidatesPendingCapture() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        run.start()
+        run.onVolumeKey(VolumeKey.UP, true)
+        run.end()
+        run.resume()
+        platform.advance(30_000)
+        assertEquals(0, platform.screenshots)
+        assertEquals("已结束；未发起施肥尝试", platform.state.message)
+        assertTrue(platform.state.overlayVisible)
+    }
+
+    @Test fun heldKeysDoNotStartResumeOrStopAnotherRunAndKeepEventStreamsPaired() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        assertFalse(run.onVolumeKey(VolumeKey.UP, true))
+        run.start()
+        assertFalse(run.onVolumeKey(VolumeKey.UP, true, repeatCount = 4))
+        assertFalse(run.onVolumeKey(VolumeKey.UP, false))
+        assertTrue(platform.state.running)
+        assertTrue(run.onVolumeKey(VolumeKey.DOWN, true))
+        run.start()
+        assertTrue(run.onVolumeKey(VolumeKey.DOWN, true, repeatCount = 3))
+        assertTrue(run.onVolumeKey(VolumeKey.DOWN, false))
+        assertTrue(platform.state.running)
+        platform.advance(200)
+        platform.reply(farm())
+        assertFalse(run.onVolumeKey(VolumeKey.UP, true))
+        assertFalse(run.onVolumeKey(VolumeKey.UP, false))
+        assertFalse(run.onVolumeKey(VolumeKey.DOWN, true))
+        assertFalse(run.onVolumeKey(VolumeKey.DOWN, false))
+        assertNotNull(platform.state.recognition)
+    }
+
+    @Test fun resumeRechecksPlatformBeforeTakingAnotherScreenshot() {
+        val platform = FakePlatform()
+        val run = ReadOnlyRun(platform)
+        run.start()
+        run.onVolumeKey(VolumeKey.UP, true)
+        platform.problem = "当前不是支付宝前台页面"
+        run.resume()
+        platform.advance(30_000)
+        assertEquals(0, platform.screenshots)
+        assertEquals("已停止：当前不是支付宝前台页面；未发起施肥尝试", platform.state.message)
+        assertFalse(platform.state.paused)
+    }
+
     private fun farm() = OcrFrame(720, 1280, listOf(
         OcrLine("芭芭农场", Bounds(20, 100, 220, 150)),
         OcrLine("肥料：1200", Bounds(250, 820, 450, 860)),
@@ -160,12 +336,14 @@ private class FakePlatform : ReadOnlyPlatform {
     var state = RunView()
     var screenshots = 0
     val requests = mutableListOf<(Result<OcrFrame>) -> Unit>()
+    val captureGuards = mutableListOf<() -> Boolean>()
     private val jobs = mutableListOf<Pair<Long, () -> Unit>>()
     override fun nowMillis() = time
     override fun unavailableReason() = problem
     override fun show(view: RunView) { state = view }
     override fun schedule(delayMillis: Long, action: () -> Unit) { jobs += time + delayMillis to action }
-    override fun captureAndRecognize(callback: (Result<OcrFrame>) -> Unit) {
+    override fun captureAndRecognize(isCurrent: () -> Boolean, callback: (Result<OcrFrame>) -> Unit) {
+        captureGuards += isCurrent
         screenshots++
         requests += callback
     }

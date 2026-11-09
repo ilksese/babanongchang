@@ -6,8 +6,11 @@ data class Bounds(val left: Int, val top: Int, val right: Int, val bottom: Int)
 data class OcrLine(val text: String, val bounds: Bounds)
 data class OcrFrame(val width: Int, val height: Int, val lines: List<OcrLine>)
 data class FarmRecognition(val fertilizerBalance: Long, val button: Bounds)
+enum class VolumeKey { UP, DOWN }
+
 data class RunView(
     val running: Boolean = false,
+    val paused: Boolean = false,
     val overlayVisible: Boolean = true,
     val message: String = "只读验证：请手动进入支付宝芭芭农场",
     val recognition: FarmRecognition? = null,
@@ -19,7 +22,8 @@ interface ReadOnlyPlatform {
     fun unavailableReason(): String?
     fun show(view: RunView)
     fun schedule(delayMillis: Long, action: () -> Unit)
-    fun captureAndRecognize(callback: (Result<OcrFrame>) -> Unit)
+    /** Check isCurrent before every async continuation, especially before starting OCR. */
+    fun captureAndRecognize(isCurrent: () -> Boolean, callback: (Result<OcrFrame>) -> Unit)
 }
 
 class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
@@ -28,9 +32,43 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
 
     private var generation = 0L
     private var deadline = 0L
+    private var remainingMillis = 10_000L
+    private val heldKeys = mutableMapOf<VolumeKey, Boolean>()
+
+    fun onVolumeKey(key: VolumeKey, down: Boolean, repeatCount: Int = 0): Boolean {
+        if (!down) return heldKeys.remove(key) ?: false
+        heldKeys[key]?.let { return it }
+        val consume = view.running || view.paused
+        heldKeys[key] = consume
+        if (consume && repeatCount == 0) {
+            if (key == VolumeKey.UP) pause() else end()
+        }
+        return consume
+    }
 
     fun start() {
-        if (view.running) return
+        if (view.running || view.paused) return
+        remainingMillis = 10_000
+        beginRecognition()
+    }
+
+    fun resume() {
+        if (view.paused) beginRecognition()
+    }
+
+    fun end() {
+        if (view.running || view.paused) finish("已结束；未发起施肥尝试")
+    }
+
+    private fun pause() {
+        if (!view.running) return
+        remainingMillis = (deadline - platform.nowMillis()).coerceAtLeast(0)
+        generation++
+        view = RunView(paused = true, message = "已暂停：请通过浮层继续或结束；未发起施肥尝试")
+        platform.show(view)
+    }
+
+    private fun beginRecognition() {
         val token = ++generation
         val problem = platform.unavailableReason()
         if (problem != null) {
@@ -40,8 +78,8 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
         }
         view = RunView(running = true, overlayVisible = false, message = "正在只读识别")
         platform.show(view)
-        deadline = platform.nowMillis() + 10_000
-        platform.schedule(10_000) {
+        deadline = platform.nowMillis() + remainingMillis
+        platform.schedule(remainingMillis) {
             if (active(token)) finish("已停止：只读识别超时（10秒）；未发起施肥尝试")
         }
         // Allow the accessibility overlay removal to reach the display before capturing.
@@ -52,7 +90,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
                 finish("已停止：$problem；未发起施肥尝试")
                 return@schedule
             }
-            platform.captureAndRecognize { result ->
+            platform.captureAndRecognize({ active(token) && platform.nowMillis() < deadline }) { result ->
                 if (!active(token)) return@captureAndRecognize
                 val problem = platform.unavailableReason()
                 if (problem != null) {
@@ -103,7 +141,7 @@ class ReadOnlyRun(private val platform: ReadOnlyPlatform) {
     }
 
     fun stop(reason: String) {
-        if (view.running) finish("已停止：$reason；未发起施肥尝试")
+        if (view.running || view.paused) finish("已停止：$reason；未发起施肥尝试")
     }
 
     private fun active(token: Long) = view.running && token == generation

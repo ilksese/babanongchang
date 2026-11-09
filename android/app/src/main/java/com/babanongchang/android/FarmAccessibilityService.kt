@@ -3,6 +3,7 @@ package com.babanongchang.android
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.app.KeyguardManager
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
@@ -12,9 +13,11 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
@@ -56,6 +59,14 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
         if (serviceInfo.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT == 0) {
             return "系统未提供无障碍截图能力（需要 Android 11+）"
         }
+        if (serviceInfo.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_REQUEST_FILTER_KEY_EVENTS == 0 ||
+            serviceInfo.flags and AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS == 0
+        ) return "系统未提供辅助按键拦截能力，无法安全控制运行"
+        val otherKeyFilter = getSystemService(AccessibilityManager::class.java)
+            .getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
+            .any { it.id != serviceInfo.id &&
+                it.flags and AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS != 0 }
+        if (otherKeyFilter) return "其他无障碍服务正在请求按键拦截，无法保证音量键控制"
         if (!getSystemService(PowerManager::class.java).isInteractive ||
             getSystemService(KeyguardManager::class.java).isKeyguardLocked
         ) return "屏幕已关闭或锁定"
@@ -86,8 +97,12 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
             maxLines = 5
         })
         layout.addView(Button(this).apply {
-            text = "开始只读识别"
-            setOnClickListener { run.start() }
+            text = if (view.paused) "继续" else "开始只读识别"
+            setOnClickListener { if (view.paused) run.resume() else run.start() }
+        })
+        if (view.paused) layout.addView(Button(this).apply {
+            text = "结束"
+            setOnClickListener { run.end() }
         })
         val params = WindowManager.LayoutParams(
             (260 * resources.displayMetrics.density).toInt(),
@@ -108,9 +123,11 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
         overlay = null
     }
 
-    override fun captureAndRecognize(callback: (Result<OcrFrame>) -> Unit) {
+    override fun captureAndRecognize(isCurrent: () -> Boolean, callback: (Result<OcrFrame>) -> Unit) {
+        if (!alive || !isCurrent()) return
         if (recognizing) {
-            callback(Result.failure(IllegalStateException("OCR busy")))
+            // Drain an old in-flight request without failing or overlapping the resumed run.
+            schedule(200) { captureAndRecognize(isCurrent, callback) }
             return
         }
         recognizing = true
@@ -125,10 +142,16 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
                         ERROR_TAKE_SCREENSHOT_SECURE_WINDOW -> "当前窗口禁止截图"
                         else -> "无障碍截图失败"
                     }
+                    if (!alive || !isCurrent()) return
                     callback(Result.failure(PlatformFailure("$reason（错误码$errorCode）")))
                 }
 
                 override fun onSuccess(screenshot: ScreenshotResult) {
+                    if (!alive || !isCurrent()) {
+                        screenshot.hardwareBuffer.close()
+                        recognizing = false
+                        return
+                    }
                     val bitmap = try {
                         screenshot.hardwareBuffer.use { buffer ->
                             val hardware = Bitmap.wrapHardwareBuffer(buffer, screenshot.colorSpace)
@@ -144,7 +167,7 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
                         callback(Result.failure(error))
                         return
                     }
-                    if (!alive || !run.view.running) {
+                    if (!alive || !isCurrent()) {
                         bitmap.recycle()
                         recognizing = false
                         return
@@ -152,6 +175,11 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
                     try {
                         recognizer.process(InputImage.fromBitmap(bitmap, 0))
                             .addOnCompleteListener(mainExecutor) { task ->
+                                if (!alive || !isCurrent()) {
+                                    bitmap.recycle()
+                                    recognizing = false
+                                    return@addOnCompleteListener
+                                }
                                 val result = if (task.isSuccessful) runCatching {
                                     OcrFrame(bitmap.width, bitmap.height,
                                         task.result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
@@ -177,12 +205,31 @@ class FarmAccessibilityService : AccessibilityService(), ReadOnlyPlatform {
         }
     }
 
+    override fun onKeyEvent(event: KeyEvent): Boolean {
+        val key = when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP -> VolumeKey.UP
+            KeyEvent.KEYCODE_VOLUME_DOWN -> VolumeKey.DOWN
+            else -> return false
+        }
+        if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
+        return run.onVolumeKey(key, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (run.view.running) unavailableReason()?.let { run.stop(it) }
+        if (run.view.running || run.view.paused) unavailableReason()?.let { run.stop(it) }
     }
 
     override fun onInterrupt() {
         run.stop("无障碍服务中断")
+    }
+
+    override fun onUnbind(intent: Intent?): Boolean {
+        alive = false
+        connected = null
+        run.stop("无障碍服务断开")
+        handler.removeCallbacksAndMessages(null)
+        removeOverlay()
+        return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
