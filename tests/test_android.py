@@ -67,6 +67,34 @@ class AndroidDeviceTest(unittest.TestCase):
 
 
 class AndroidEntryTest(unittest.TestCase):
+    def test_taobao_confidence_is_applied_only_to_taobao(self):
+        from babanongchang.cli import FarmAutomation
+        from babanongchang.taobao import TaobaoAutomation, is_taobao_farm_page
+
+        bridge = Mock()
+        bridge.capture.return_value = cv2.imencode(".png", np.zeros((1600, 720, 3), np.uint8))[1].tobytes()
+        bridge.recognize.return_value = json.dumps([
+            ["芭芭农场1免费领水果", [[100, 70], [440, 70], [440, 110], [100, 110]], .523],
+            ["施肥", [[320, 1130], [400, 1130], [400, 1170], [320, 1170]], .688],
+        ])
+        with tempfile.TemporaryDirectory() as output, patch("babanongchang.cli.main") as main:
+            android.run(bridge, "taobao", "", output, .5)
+            device = main.call_args.kwargs["device_factory"](None)
+            self.assertTrue(is_taobao_farm_page(TaobaoAutomation(device).scan().items))
+            self.assertFalse(is_taobao_farm_page(FarmAutomation(device).scan().items))
+
+            android.run(bridge, "all", "", output)
+            reset_device = main.call_args.kwargs["device_factory"](None)
+            self.assertEqual(TaobaoAutomation(reset_device).min_score, .75)
+            self.assertEqual(device.taobao_min_score, .5)
+
+    def test_rejects_invalid_taobao_confidence_before_device_access(self):
+        bridge = Mock()
+        for value in (-.01, 1.01, float("nan")):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "置信度"):
+                android.run(bridge, "taobao", "", "unused", value)
+        bridge.capture.assert_not_called()
+
     def test_all_modules_use_injected_device_and_original_arguments(self):
         with tempfile.TemporaryDirectory() as output:
             for module in ("all", "fertilize", "goods", "tasks", "taobao", "games"):

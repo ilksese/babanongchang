@@ -25,6 +25,8 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
     fun start(module: String, options: String) {
         if (busy) return
         service.cliUnavailableReason()?.let { message = it; service.showCliControls(); return }
+        val taobaoConfidence = service.getSharedPreferences("cli", android.content.Context.MODE_PRIVATE)
+            .getInt("taobao_confidence", 75).coerceIn(0, 100) / 100.0
         val gate = CliRunControl(SystemClock::elapsedRealtime)
         control = gate
         busy = true
@@ -56,7 +58,7 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
                     }
                 }
                 CliPython.get(service).getModule("babanongchang.android")
-                    .callAttr("run", bridge, module, options, outputDirectory.absolutePath)
+                    .callAttr("run", bridge, module, options, outputDirectory.absolutePath, taobaoConfidence)
             } catch (error: Exception) {
                 result = "已停止：${error.message ?: error.javaClass.simpleName}"
                 synchronized(logBuffer) { logBuffer.append("\n$result\n") }

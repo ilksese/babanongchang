@@ -172,6 +172,10 @@ class TaobaoAutomation(FarmAutomation):
 
     def __init__(self, adb: Adb) -> None:
         super().__init__(adb)
+        min_score = getattr(adb, "taobao_min_score", 0.75)
+        if not 0 <= min_score <= 1:
+            raise ValueError("淘宝 OCR 置信度阈值必须在 0 到 1 之间")
+        self.min_score = min_score
 
     def wait_for_farm_page_ready(self, timeout: float = 30) -> OcrText:
         """等待农场页及“集肥料”入口连续三帧位置稳定。"""

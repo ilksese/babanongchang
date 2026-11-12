@@ -12,6 +12,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
+import android.widget.SeekBar
 import android.widget.TextView
 import java.io.File
 import java.util.zip.ZipEntry
@@ -61,6 +62,31 @@ class MainActivity : Activity() {
             setSelection(preferences.getInt("feature", 0).coerceIn(features.indices))
             layout.addView(this)
         }
+        val confidenceLabel = text("")
+        val confidence = SeekBar(this).apply {
+            contentDescription = "淘宝 OCR 置信度阈值"
+            max = 100
+            progress = preferences.getInt("taobao_confidence", 75).coerceIn(0, 100)
+            layout.addView(this)
+        }
+        fun updateConfidence(value: Int) {
+            confidenceLabel.text = "淘宝 OCR 置信度阈值：%.2f".format(java.util.Locale.ROOT, value / 100.0)
+        }
+        updateConfidence(confidence.progress)
+        confidence.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
+                updateConfidence(progress)
+            }
+            override fun onStartTrackingTouch(bar: SeekBar?) = Unit
+            override fun onStopTrackingTouch(bar: SeekBar?) {
+                preferences.edit().putInt("taobao_confidence", confidence.progress).apply()
+            }
+        })
+        button("重置淘宝置信度") {
+            confidence.progress = 75
+            preferences.edit().putInt("taobao_confidence", 75).apply()
+        }
+        text("淘宝置信度滑动时显示数值，松手后保存，重置立即保存；下一轮淘宝流程生效（含全部流程中的淘宝部分）。默认 0.75；调低可识别更多文字，也会增加误识别风险，不影响支付宝和游戏。")
         text("附加参数（与 CLI 相同，空白使用默认值；无需输入命令和模块名）")
         options = EditText(this).apply {
             hint = "例如 --threshold 600 --max-clicks 3\n挪了个箭：--mode safe --levels 3 --max-minutes 15"

@@ -124,9 +124,11 @@ class RunLog(io.TextIOBase):
         pass
 
 
-def run(bridge, module, options, output_dir):
+def run(bridge, module, options, output_dir, taobao_min_score=0.75):
     from babanongchang.cli import build_parser, main
 
+    if not 0 <= taobao_min_score <= 1:
+        raise ValueError("淘宝 OCR 置信度阈值必须在 0 到 1 之间")
     arguments = [module, *shlex.split(options)]
     parser = build_parser()
     args = parser.parse_args(arguments)
@@ -137,6 +139,7 @@ def run(bridge, module, options, output_dir):
     if args.output == Path("artifacts/nlgj"):
         arguments += ["--output", output_dir]
     device = AndroidDevice(bridge)
+    device.taobao_min_score = taobao_min_score
     game = AndroidGameDevice(device) if args.nlgj and not args.screenshot else None
     previous_directory = Path.cwd()
     runtime.backend = bridge
