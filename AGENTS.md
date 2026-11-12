@@ -15,3 +15,17 @@
 
 - `babanongchang.toml` 在模块导入时从 `Path.cwd()` 读取；从仓库根目录启动才能应用仓库内 OCR 配置。
 - `babanongchang.toml`、`TextHandle` 和 `back_until` 的 timeout/interval 单位是毫秒；业务自动化方法的 `timeout`、`duration_seconds` 通常是秒，传给底层等待前需乘以 1000。
+
+## Agent skills
+
+### Issue tracker
+
+创建、读取或更新规格与任务时，使用 GitHub Issues；规则见 `docs/agents/issue-tracker.md`。
+
+### Triage labels
+
+分类或更新任务状态时，使用 `docs/agents/triage-labels.md` 中的五种标准标签。
+
+### Domain docs
+
+讨论领域概念、编写规格或修改代码前，按 `docs/agents/domain.md` 读取术语表和相关 ADR；采用单上下文布局。
