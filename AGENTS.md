@@ -1,3 +1,10 @@
+# 项目版本
+
+- 本项目提供两个版本：电脑端 CLI 和手机端 Android APK。
+- CLI 版位于 `src/babanongchang/`，通过电脑上的 ADB 操作手机，使用 `uv run babanongchang ...` 运行。
+- Android 版位于 `android/`，内嵌 Python 并复用 CLI 的业务代码，通过手机无障碍服务在本机运行，无需电脑、ADB 或 Root。构建、使用和验证说明见 `android/README.md`。
+- 用户要求安装本项目 APK 时，使用 Android 版；若尚无 APK，先在 `android/` 执行 `./gradlew assembleDebug`，再通过 ADB 安装 `android/app/build/outputs/apk/debug/app-debug.apk`。安装不代表授权启动自动化流程。
+
 # 开发与验证
 
 - 使用 `uv` 管理锁定为 3.14.x 的 Python 环境；首次安装依赖运行 `uv sync`。
