@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
-import time
+from babanongchang import runtime as time
 from typing import Sequence
 
 import cv2
@@ -763,10 +763,15 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         choices=("all", "fertilize", "goods", "tasks", "taobao", "games"),
         default="all",
-        help="运行模块：all（默认，自动检测安装情况，支付宝优先，再执行淘宝）、fertilize（仅施肥）、goods（逛农货/百县百品）、tasks（做任务领肥料）、taobao（仅淘宝流程）或 games（需指定 --majiang）",
+        help="运行模块：all（默认，自动检测安装情况，支付宝优先，再执行淘宝）、fertilize（仅施肥）、goods（逛农货/百县百品）、tasks（做任务领肥料）、taobao（仅淘宝流程）或 games（需指定 --majiang 或 --nlgj）",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
-    parser.add_argument("--majiang", action="store_true", help="games 模块：使用免费磁铁连续闯关，直到手动停止或步骤超时")
+    games = parser.add_mutually_exclusive_group()
+    games.add_argument("--majiang", action="store_true", help="games 模块：使用免费磁铁连续闯关，直到手动停止或步骤超时")
+    games.add_argument("--nlgj", action="store_true", help="games 模块：挪了个箭，默认最多通关 3 次或运行 15 分钟")
+    from babanongchang.nlgj.cli import add_arguments
+
+    add_arguments(parser)
     parser.add_argument("--threshold", type=int, default=600, help="停止施肥的余额阈值（默认：600）")
     parser.add_argument(
         "--browse-seconds",
@@ -778,18 +783,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    if (args.module == "games") != args.majiang:
-        raise SystemExit("麻将游戏请使用 games --majiang")
+def main(argv: Sequence[str] | None = None, *, device_factory=None, game_device=None, game_reader=None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if (args.module == "games") != (args.majiang or args.nlgj):
+        raise SystemExit("游戏请使用 games --majiang 或 games --nlgj")
     if args.threshold < 0 or args.browse_seconds < 15:
         raise SystemExit("threshold 不能为负数，browse-seconds 不能少于 15 秒")
     if args.max_clicks is not None and args.max_clicks < 1:
         raise SystemExit("max-clicks 必须大于 0")
 
+    if args.nlgj:
+        from babanongchang.nlgj.cli import run
+
+        run(parser, args, device=game_device, reader=game_reader)
+        return
+
     adb: Adb | None = None
     try:
-        adb = Adb(args.serial)
+        adb = (device_factory or Adb)(args.serial)
         if args.module == "games":
             from babanongchang.majiang import MajiangAutomation
 

@@ -27,3 +27,4 @@ Thumbs.db
 # Local runtime captures
 *-screen.png
 *-window.xml
+artifacts/

@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("com.chaquo.python")
 }
 
 android {
@@ -10,13 +11,26 @@ android {
         applicationId = "com.babanongchang.android"
         minSdk = 30
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.2-single-attempt"
+        versionCode = 2
+        versionName = "0.3-cli"
+        ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+chaquopy {
+    defaultConfig {
+        version = "3.10"
+        pip {
+            install("numpy==1.26.2")
+            install("opencv-python-headless==4.5.1.48")
+            install("tomli==2.4.0")
+        }
+    }
+    sourceSets.getByName("main") { srcDir("../../src") }
 }
 
 dependencies {

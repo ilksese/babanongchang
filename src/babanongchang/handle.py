@@ -2,15 +2,20 @@ from __future__ import annotations
 
 import logging
 import re
-import time
+from babanongchang import runtime as time
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeVar, cast
 
 import numpy as np
-from rapidocr import RapidOCR
 
 from babanongchang.config import PROJECT_CONFIG
+
+
+def RapidOCR():
+    from rapidocr import RapidOCR as Engine
+
+    return Engine()
 
 
 class AutomationError(RuntimeError):
@@ -113,7 +118,9 @@ class TextHandle:
             raise ValueError("OCR 最低置信度必须在 0 到 1 之间")
         logging.getLogger("RapidOCR").setLevel(logging.WARNING)
         self.adb = adb
-        self.ocr = ocr if ocr is not None else cast(OcrEngine, RapidOCR())
+        self.ocr = ocr if ocr is not None else getattr(adb, "ocr", None)
+        if self.ocr is None:
+            self.ocr = cast(OcrEngine, RapidOCR())
         self.min_score = min_score
 
     def scan(self) -> ScreenSnapshot:

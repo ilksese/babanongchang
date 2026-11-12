@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-import time
+from babanongchang import runtime as time
 from typing import Iterable, Protocol
 
 import numpy as np

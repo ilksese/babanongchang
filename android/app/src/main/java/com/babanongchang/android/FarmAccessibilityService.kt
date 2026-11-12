@@ -42,6 +42,9 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
 
     private val handler = Handler(Looper.getMainLooper())
     private val run = SingleFertilizationRun(this)
+    val cliRun = CliAutomationRun(this)
+    private var cliModule = "all"
+    private var cliOptions = ""
     private val recognizer by lazy {
         TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
     }
@@ -49,6 +52,7 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     private var alive = false
     private var recognizing = false
     private var lastScreenshotMillis = -500L
+    private val cliHeldKeys = mutableSetOf<Int>()
 
     override fun onServiceConnected() {
         alive = true
@@ -57,12 +61,65 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     }
 
     fun showControls() {
-        if (!run.view.running) show(run.view)
+        if (!run.view.running && !run.view.paused) showCliControls()
+    }
+
+    fun configureCli(module: String, options: String): Boolean {
+        if (cliRun.busy || run.view.running || run.view.paused) return false
+        cliModule = module
+        cliOptions = options
+        showCliControls()
+        return true
+    }
+
+    fun showSingleAttempt() {
+        if (!cliRun.busy) show(run.view)
+    }
+
+    fun hideControls() = removeOverlay()
+
+    fun showCliControls() {
+        removeOverlay()
+        if (!alive) return
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(12, 8, 12, 8)
+            setBackgroundColor(Color.rgb(245, 245, 245))
+        }
+        layout.addView(TextView(this).apply {
+            text = "CLI · $cliModule $cliOptions\n${cliRun.message}"
+            setTextColor(Color.BLACK)
+            textSize = 13f
+            maxLines = 6
+        })
+        fun button(title: String, action: () -> Unit) {
+            layout.addView(Button(this).apply { text = title; setOnClickListener { action() } })
+        }
+        when {
+            cliRun.paused -> {
+                button("继续") { cliRun.resume() }
+                button("结束") { cliRun.end() }
+            }
+            cliRun.busy -> {
+                button("暂停") { cliRun.pause() }
+                button("结束") { cliRun.end() }
+            }
+            else -> button("开始所选流程") { cliRun.start(cliModule, cliOptions) }
+        }
+        attachOverlay(layout)
     }
 
     override fun nowMillis() = SystemClock.elapsedRealtime()
 
     override fun unavailableReason(): String? {
+        cliUnavailableReason()?.let { return it }
+        if (rootInActiveWindow?.packageName?.toString() != ALIPAY_PACKAGE) {
+            return "当前不是支付宝前台页面"
+        }
+        return null
+    }
+
+    fun cliUnavailableReason(): String? {
         if (!alive) return "无障碍服务未连接"
         if (serviceInfo.capabilities and AccessibilityServiceInfo.CAPABILITY_CAN_TAKE_SCREENSHOT == 0) {
             return "系统未提供无障碍截图能力（需要 Android 11+）"
@@ -81,9 +138,6 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
         if (!getSystemService(PowerManager::class.java).isInteractive ||
             getSystemService(KeyguardManager::class.java).isKeyguardLocked
         ) return "屏幕已关闭或锁定"
-        if (rootInActiveWindow?.packageName?.toString() != ALIPAY_PACKAGE) {
-            return "当前不是支付宝前台页面"
-        }
         val appWindows = windows.filter { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
         if (appWindows.size != 1) return "存在多个应用窗口或弹窗，无法确认页面"
         return null
@@ -139,6 +193,10 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
             text = "结束"
             setOnClickListener { run.end() }
         })
+        attachOverlay(layout)
+    }
+
+    private fun attachOverlay(layout: View) {
         val params = WindowManager.LayoutParams(
             (260 * resources.displayMetrics.density).toInt(),
             WindowManager.LayoutParams.WRAP_CONTENT,
@@ -156,7 +214,8 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
         } catch (error: RuntimeException) {
             overlay = null
             overlayFailure = "控制浮层不可用：${error.javaClass.simpleName}"
-            lastMessage = "${view.message}；$overlayFailure"
+            lastMessage = overlayFailure
+            if (cliRun.busy) cliRun.end()
         }
     }
 
@@ -280,6 +339,17 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
             else -> return false
         }
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
+        if (event.keyCode in cliHeldKeys) {
+            if (event.action == KeyEvent.ACTION_UP) cliHeldKeys.remove(event.keyCode)
+            return true
+        }
+        if (cliRun.busy) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                cliHeldKeys.add(event.keyCode)
+                if (key == VolumeKey.UP) cliRun.pause() else cliRun.end()
+            }
+            return true
+        }
         return run.onVolumeKey(key, event.action == KeyEvent.ACTION_DOWN, event.repeatCount)
     }
 
@@ -297,11 +367,13 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     }
 
     override fun onInterrupt() {
+        cliRun.end()
         run.stop("无障碍服务中断")
     }
 
     private fun disconnect() {
         alive = false
+        cliRun.end()
         if (connected === this) connected = null
         run.stop("无障碍服务断开")
         handler.removeCallbacksAndMessages(null)
