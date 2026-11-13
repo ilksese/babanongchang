@@ -6,13 +6,10 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
-import android.widget.ArrayAdapter
 import android.widget.Button
-import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.Spinner
-import android.widget.SeekBar
+import android.widget.RadioButton
 import android.widget.TextView
 import java.io.File
 import java.util.zip.ZipEntry
@@ -21,127 +18,153 @@ import java.util.zip.ZipOutputStream
 class MainActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var runStatus: TextView
-    private lateinit var logs: TextView
-    private lateinit var options: EditText
-    private lateinit var selection: Spinner
     private val handler = Handler(Looper.getMainLooper())
-    private val features = listOf("全部流程（支付宝 → 淘宝）", "支付宝：连续施肥", "支付宝：逛农货", "支付宝：任务池", "淘宝：完整流程", "游戏：麻将", "游戏：挪了个箭")
-    private val modules = listOf("all", "fertilize", "goods", "tasks", "taobao", "games", "games")
+    private var selectedFeature = 0
+    private val featureButtons = mutableListOf<RadioButton>()
+    private lateinit var connection: TextView
+    private lateinit var serviceHint: TextView
+    private lateinit var serviceSettings: Button
+    private lateinit var pauseButton: Button
+    private lateinit var endButton: Button
     private val refresh = object : Runnable {
         override fun run() {
+            val persistedFeature = getSharedPreferences("cli", MODE_PRIVATE).getInt("feature", 0).coerceIn(FarmFeatures.titles.indices)
+            if (persistedFeature != selectedFeature) selectFeature(persistedFeature)
             val service = FarmAccessibilityService.connected
-            runStatus.text = if (service == null) "无障碍服务未连接，请在系统设置中手动开启"
-                else "${service.cliRun.message}\n${FarmAccessibilityService.overlayFailure.orEmpty()}"
-            val latest = service?.cliRun?.logs.orEmpty()
-            if (logs.text.toString() != latest) logs.text = latest
+            serviceHint.visibility = if (service == null) android.view.View.VISIBLE else android.view.View.GONE
+            serviceSettings.visibility = serviceHint.visibility
+            connection.text = if (service == null) "需要开启无障碍服务" else "无障碍已连接 · 可以使用小白球"
+            val message = when {
+                service == null -> "开启服务后，选择功能并显示小白球。"
+                service.cliRun.paused -> "已暂停，可点击小白球继续或结束。"
+                service.cliRun.busy -> "正在照料中 · 音量上暂停，音量下结束"
+                else -> service.cliRun.message
+            } + FarmAccessibilityService.overlayFailure?.let { "\n$it" }.orEmpty()
+            if (runStatus.text.toString() != message) runStatus.text = message
+            pauseButton.isEnabled = service?.cliRun?.busy == true && !service.cliRun.paused
+            endButton.isEnabled = service?.cliRun?.busy == true
             handler.postDelayed(this, 1000)
+        }
+    }
+
+    private fun selectFeature(index: Int) {
+        selectedFeature = index
+        getSharedPreferences("cli", MODE_PRIVATE).edit().putInt("feature", index).apply()
+        featureButtons.forEachIndexed { i, button ->
+            button.isChecked = i == index
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val preferences = getSharedPreferences("cli", MODE_PRIVATE)
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 40, 24, 24)
+        val gutter = maxOf(20, (resources.configuration.screenWidthDp - 560) / 2)
+        val layout = FarmUi.column(this, gutter)
+        layout.setPadding(FarmUi.dp(this, gutter), FarmUi.dp(this, 20), FarmUi.dp(this, gutter), FarmUi.dp(this, 24))
+        fun text(parent: LinearLayout, value: String, size: Float = 16f, bold: Boolean = false) =
+            FarmUi.text(this, value, size, bold = bold).also { parent.addView(it) }
+        fun button(parent: LinearLayout, title: String, style: FarmUi.ButtonStyle = FarmUi.ButtonStyle.SECONDARY, action: () -> Unit) =
+            FarmUi.button(this, title, style, action).also { parent.addView(it) }
+        text(layout, "芭芭农场", 30f, true)
+        text(layout, "让照料农场，简单一点。", 16f)
+        val welcome = FarmUi.card(this).also { layout.addView(it) }
+        connection = text(welcome, "正在连接服务", 16f, true)
+        serviceHint = text(welcome, "首次使用只需开启无障碍服务。截图与识别均在手机上完成，无需电脑。", 15f)
+        serviceSettings = button(welcome, "设置无障碍服务") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        text(layout, "今天想做什么", 22f, true)
+        text(layout, "选择一项，稍后在小白球里手动开始。", 15f)
+        fun feature(index: Int): android.view.View {
+            val choice = FarmUi.choice(this, FarmFeatures.titles[index], FarmFeatures.descriptions[index]) { selectFeature(index) }
+            featureButtons += choice
+            return FarmUi.feature(this, index, choice)
         }
-        fun text(value: String) = TextView(this).apply {
-            text = value
-            textSize = 16f
-            setPadding(0, 10, 0, 10)
-            layout.addView(this)
-        }
-        fun button(title: String, action: () -> Unit) {
-            layout.addView(Button(this).apply { text = title; setOnClickListener { action() } })
-        }
-        text("芭芭农场 · CLI 全功能版")
-        text("本机离线运行，与 CLI 共用任务池及游戏算法。无障碍授权后可截图、识别、点击、滑动、返回与启动支付宝／淘宝。不会自动登录或解锁。连续施肥会消耗肥料，游戏可能观看广告或使用已有金币／体力，规则与 CLI 参数一致。")
-        text("全部流程会启动已安装的支付宝和淘宝；单项农场功能请先手动进入农场，游戏请先手动进入目标游戏。保持解锁，运行期间不要手动改变页面。")
-        selection = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MainActivity, android.R.layout.simple_spinner_dropdown_item, features)
-            setSelection(preferences.getInt("feature", 0).coerceIn(features.indices))
-            layout.addView(this)
-        }
-        val confidenceLabel = text("")
-        val confidence = SeekBar(this).apply {
-            contentDescription = "淘宝 OCR 置信度阈值"
-            max = 100
-            progress = preferences.getInt("taobao_confidence", 75).coerceIn(0, 100)
-            layout.addView(this)
-        }
-        fun updateConfidence(value: Int) {
-            confidenceLabel.text = "淘宝 OCR 置信度阈值：%.2f".format(java.util.Locale.ROOT, value / 100.0)
-        }
-        updateConfidence(confidence.progress)
-        confidence.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-            override fun onProgressChanged(bar: SeekBar?, progress: Int, fromUser: Boolean) {
-                updateConfidence(progress)
+        layout.addView(feature(0))
+        val columns = if (minOf(resources.configuration.screenWidthDp, 560) / resources.configuration.fontScale < 320) 1 else 2
+        for (first in 1 until FarmFeatures.titles.size step columns) {
+            val row = LinearLayout(this)
+            for (index in first until minOf(first + columns, FarmFeatures.titles.size)) {
+                feature(index).also {
+                    it.layoutParams = LinearLayout.LayoutParams(0, -1, 1f).apply {
+                        topMargin = FarmUi.dp(this@MainActivity, 8)
+                        if (columns > 1 && index == first) marginEnd = FarmUi.dp(this@MainActivity, 8)
+                    }
+                    row.addView(it)
+                }
             }
-            override fun onStartTrackingTouch(bar: SeekBar?) = Unit
-            override fun onStopTrackingTouch(bar: SeekBar?) {
-                preferences.edit().putInt("taobao_confidence", confidence.progress).apply()
-            }
-        })
-        button("重置淘宝置信度") {
-            confidence.progress = 75
-            preferences.edit().putInt("taobao_confidence", 75).apply()
+            layout.addView(row, LinearLayout.LayoutParams(-1, -2))
         }
-        text("淘宝置信度滑动时显示数值，松手后保存，重置立即保存；下一轮淘宝流程生效（含全部流程中的淘宝部分）。默认 0.75；调低可识别更多文字，也会增加误识别风险，不影响支付宝和游戏。")
-        text("附加参数（与 CLI 相同，空白使用默认值；无需输入命令和模块名）")
-        options = EditText(this).apply {
-            hint = "例如 --threshold 600 --max-clicks 3\n挪了个箭：--mode safe --levels 3 --max-minutes 15"
-            setText(preferences.getString("options", ""))
-            minLines = 3
-            maxLines = 7
-            inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
-            layout.addView(this)
-        }
-        text("可填写全部业务参数：挪了个箭 safe／fast、目标关卡、复活广告、连胜、重开上限、棋盘裁切、只读识别及离线截图。--serial／--adb 仅适用于电脑。")
-        text("音量上暂停、音量下结束。暂停后从浮层继续；旧页面坐标失效时会停止，避免继续误点。已发出的手势无法撤销，结束后请检查未确认的操作。目标手机和实体音量键仍需验收。")
-        status = text("")
-        runStatus = text("")
-        button("打开系统无障碍设置") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        button("保存选择并显示控制浮层") {
-            val index = selection.selectedItemPosition
+        selectFeature(savedInstanceState?.getInt("feature") ?: preferences.getInt("feature", 0).coerceIn(FarmFeatures.titles.indices))
+        text(layout, "一键照料会打开支付宝和淘宝；其他功能请先进入对应农场或游戏。", 14f)
+        status = text(layout, "点击下方按钮，仅显示小白球，不会立即运行。", 14f)
+        status.accessibilityLiveRegion = android.view.View.ACCESSIBILITY_LIVE_REGION_POLITE
+        button(layout, "开启小白球", FarmUi.ButtonStyle.PRIMARY) {
+            val index = selectedFeature
             val service = FarmAccessibilityService.connected
-            preferences.edit().putInt("feature", index).putString("options", options.text.toString()).apply()
-            val gameFlag = when (index) { 5 -> "--majiang "; 6 -> "--nlgj "; else -> "" }
+            preferences.edit().putInt("feature", index).apply()
             status.text = when {
-                service == null -> "请先启用无障碍服务"
-                !service.configureCli(modules[index], gameFlag + options.text.toString()) -> "流程仍在运行，请先结束"
-                else -> "已准备；进入目标页面后，从浮层手动开始"
+                service == null -> "请先点击上方按钮，开启无障碍服务。"
+                service.cliRun.busy -> { service.showControls(); "已显示小白球，可查看当前流程。" }
+                !service.configureCli(FarmFeatures.module(index), FeatureSettings.options(preferences, index)) -> "请先结束单次施肥验证。"
+                FarmAccessibilityService.overlayFailure != null -> FarmAccessibilityService.overlayFailure
+                else -> "小白球已准备好。进入目标页面后，点击小白球选择功能并开始。"
             }
         }
-        button("暂停当前流程") { FarmAccessibilityService.connected?.cliRun?.pause() }
-        button("结束当前流程") { FarmAccessibilityService.connected?.cliRun?.end() }
-        button("选择截图用于离线识别（挪了个箭）") {
+        text(layout, "可拖动贴边 · 点击展开 · 运行时自动隐藏", 14f)
+        val current = FarmUi.card(this).also { layout.addView(it) }
+        text(current, "当前状态", 20f, true)
+        runStatus = text(current, "尚未运行", 15f)
+        pauseButton = button(current, "暂停当前流程") { FarmAccessibilityService.connected?.cliRun?.pause() }
+        endButton = button(current, "结束当前流程", FarmUi.ButtonStyle.DANGER) { FarmAccessibilityService.connected?.cliRun?.end() }
+        text(current, "运行时保持屏幕解锁，请勿手动切换页面。音量上暂停、音量下结束，暂停后点击小白球继续。", 14f)
+        button(layout, "运行记录") { startActivity(Intent(this, RunHistoryActivity::class.java)) }.also { FarmUi.arrow(it) }
+        val advanced = FarmUi.card(this)
+        advanced.visibility = android.view.View.GONE
+        val toggle = button(layout, "高级设置与工具") {
+            advanced.visibility = if (advanced.visibility == android.view.View.VISIBLE) android.view.View.GONE else android.view.View.VISIBLE
+        }
+        FarmUi.arrow(toggle, expanded = false)
+        toggle.stateDescription = "已收起"
+        toggle.setOnClickListener {
+            val expanded = advanced.visibility != android.view.View.VISIBLE
+            advanced.visibility = if (expanded) android.view.View.VISIBLE else android.view.View.GONE
+            toggle.text = if (expanded) "收起高级设置" else "高级设置与工具"
+            toggle.stateDescription = if (expanded) "已展开" else "已收起"
+            FarmUi.arrow(toggle, expanded)
+        }
+        layout.addView(advanced)
+        button(advanced, "管理无障碍服务") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+        button(advanced, "导入挪了个箭截图") {
             startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 type = "image/*"
                 addCategory(Intent.CATEGORY_OPENABLE)
             }, 1)
         }
-        button("查看完整 CLI 参数") {
-            Thread {
-                val help = runCatching { CliPython.get(this).getModule("babanongchang.android").callAttr("help_text").toString() }
-                runOnUiThread {
-                    android.app.AlertDialog.Builder(this).setTitle("CLI 参数")
-                        .setMessage(help.getOrElse { it.message }).setPositiveButton("关闭", null).show()
-                }
-            }.start()
-        }
-        button("导出诊断（截图、识别报告及日志 ZIP）") {
-            if (FarmAccessibilityService.connected?.cliRun?.busy == true) {
-                status.text = "请先结束运行，再导出完整诊断"
-            } else startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+        button(advanced, "导出运行记录与诊断") {
+            if (FarmAccessibilityService.connected?.cliRun?.busy == true) status.text = "请先结束运行，再导出完整诊断。"
+            else startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                 type = "application/zip"
                 addCategory(Intent.CATEGORY_OPENABLE)
                 putExtra(Intent.EXTRA_TITLE, "babanongchang-diagnostics.zip")
             }, 2)
         }
-        button("原单次施肥验证") { FarmAccessibilityService.connected?.showSingleAttempt() }
-        text("截图和日志仅保存在应用私有目录。挪了个箭会保存诊断截图；只有手动导出才写入你选择的位置。中文 OCR 模型随 APK 打包，无网络权限。")
-        logs = text("").apply { textSize = 12f; setTextIsSelectable(true) }
-        setContentView(ScrollView(this).apply { addView(layout) })
+        button(advanced, "单次施肥验证") { FarmAccessibilityService.connected?.showSingleAttempt() }
+        text(layout, "使用须知", 18f, true)
+        text(layout, "连续施肥会消耗肥料；游戏可能观看广告或使用已有金币、体力。已发出的手势无法撤销，结束后请检查目标应用。", 14f)
+        text(layout, "本机离线运行 · 无网络权限\n截图与日志仅保存在手机，手动导出时才写入你选择的位置。", 14f)
+        val scroll = ScrollView(this).apply { id = R.id.home_scroll; setBackgroundColor(FarmUi.background); isFillViewport = true; addView(layout) }
+        scroll.setOnApplyWindowInsetsListener { view, insets ->
+            val safe = insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout() or android.view.WindowInsets.Type.ime())
+            view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            insets
+        }
+        setContentView(scroll)
+        scroll.requestApplyInsets()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("feature", selectedFeature)
+        getSharedPreferences("cli", MODE_PRIVATE).edit().apply()
+        super.onSaveInstanceState(outState)
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -157,9 +180,11 @@ class MainActivity : Activity() {
                         target.outputStream().use { output -> input.copyTo(output) }
                     }
                     runOnUiThread {
-                        selection.setSelection(6)
-                        options.setText("--screenshot '${target.absolutePath}' --ocr")
-                        status.text = "截图已导入，保存选择并从浮层开始；离线识别不会操作目标应用"
+                        selectFeature(6)
+                        getSharedPreferences("cli", MODE_PRIVATE).edit()
+                            .putString(FeatureSettings.key(6, "screenshot"), target.absolutePath)
+                            .putBoolean(FeatureSettings.key(6, "offline"), true).apply()
+                        status.text = "截图已导入，点击开启小白球并从面板开始；离线识别不会操作目标应用"
                     }
                 } else if (requestCode == 2) {
                     val directory = File(filesDir, "cli-output")

@@ -13,10 +13,10 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
     var paused = false
         private set
     private var ending = false
-    var message = "选择功能、填写参数后，手动进入目标页面，再从浮层开始"
+    var message = "选择功能后，进入目标页面，点击小白球手动开始。"
         private set
-    private val logBuffer = StringBuilder()
-    val logs: String get() = synchronized(logBuffer) { logBuffer.toString() }
+    @Volatile var activeRecordId: String? = null
+        private set
     val outputDirectory: File get() = File(service.filesDir, "cli-output")
 
     fun start(module: String, options: String) {
@@ -37,30 +37,36 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         paused = false
         ending = false
         message = "正在运行：$module $options"
-        synchronized(logBuffer) { logBuffer.clear() }
         service.hideControls()
         Thread({
             var result = "运行完成；详细结果见日志"
+            val history = RunHistory(File(outputDirectory, "runs"))
+            var record: RunRecord? = null
             try {
                 outputDirectory.mkdirs()
+                val index = when (module) {
+                    "games" -> if (options.contains("--majiang")) 5 else 6
+                    else -> FarmFeatures.titles.indices.firstOrNull { FarmFeatures.module(it) == module } ?: 0
+                }
+                record = history.create(FarmFeatures.titles[index], module, options)
+                activeRecordId = record.id
                 File(outputDirectory, "cli.log").writeText("")
                 gate.checkpoint()
                 val bridge = CliAccessibilityBridge(service, gate) { text ->
-                    synchronized(logBuffer) {
-                        logBuffer.append(text)
-                        if (logBuffer.length > 20000) logBuffer.delete(0, logBuffer.length - 20000)
-                        File(outputDirectory, "cli.log").appendText(text)
-                    }
+                    history.append(checkNotNull(record).id, text)
+                    File(outputDirectory, "cli.log").appendText(text)
                 }
                 CliPython.get(service).getModule("babanongchang.android")
                     .callAttr("run", bridge, module, options, outputDirectory.absolutePath, taobaoConfidence)
             } catch (error: Exception) {
                 result = "已停止：${error.message ?: error.javaClass.simpleName}"
-                synchronized(logBuffer) { logBuffer.append("\n$result\n") }
             } finally {
                 gate.stop()
                 runCatching { File(outputDirectory, "cli.log").appendText("\n$result\n") }
+                val saved = runCatching { record?.let { history.finish(it.id, result) } }
+                saved.exceptionOrNull()?.let { result += "；运行记录保存失败：${it.message}" }
                 main.post {
+                    activeRecordId = null
                     busy = false
                     service.keepTaskScreenOn(false)
                     paused = false

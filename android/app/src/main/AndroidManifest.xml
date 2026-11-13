@@ -10,13 +10,15 @@
     <application
         android:allowBackup="false"
         android:label="芭芭农场自动化"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/FarmTheme">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".FeatureSettingsActivity" android:exported="false" />
+        <activity android:name=".RunHistoryActivity" android:exported="false" />
         <service
             android:name=".FarmAccessibilityService"
             android:exported="true"

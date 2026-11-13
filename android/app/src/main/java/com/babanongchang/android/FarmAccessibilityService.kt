@@ -16,15 +16,18 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.view.Display
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.ViewConfiguration
+import android.widget.TextView
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.FrameLayout
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import android.view.accessibility.AccessibilityWindowInfo
-import android.widget.Button
-import android.widget.LinearLayout
-import android.widget.TextView
 
 class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlatform {
     companion object {
@@ -39,15 +42,20 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
 
     private val handler = Handler(Looper.getMainLooper())
     private val run = SingleFertilizationRun(this)
+    private val countdown = StartCountdown(SystemClock::elapsedRealtime) { delay, action -> handler.postDelayed(action, delay) }
+    private var countdownNumber: TextView? = null
     val cliRun = CliAutomationRun(this)
     private var cliModule = "all"
     private var cliOptions = ""
     private var overlay: View? = null
+    private var ballX: Int? = null
+    private var ballY: Int? = null
+    private var singleControls = false
+    private var panelOpen = false
     private var alive = false
     private var recognizing = false
     private var lastScreenshotMillis = -500L
     private val cliHeldKeys = mutableSetOf<Int>()
-
     private var screenWakeLock: PowerManager.WakeLock? = null
 
     @Suppress("DEPRECATION") // Tasks operate in other apps, so an Activity window flag cannot keep them awake.
@@ -69,11 +77,12 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     }
 
     fun showControls() {
+        if (countdown.active) return
         if (!run.view.running && !run.view.paused) showCliControls()
     }
 
     fun configureCli(module: String, options: String): Boolean {
-        if (cliRun.busy || run.view.running || run.view.paused) return false
+        if (countdown.active || cliRun.busy || run.view.running || run.view.paused) return false
         cliModule = module
         cliOptions = options
         showCliControls()
@@ -81,40 +90,241 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     }
 
     fun showSingleAttempt() {
-        if (!cliRun.busy) show(run.view)
+        if (!countdown.active && !cliRun.busy) show(run.view)
     }
 
     fun hideControls() = removeOverlay()
 
     fun showCliControls() {
+        singleControls = false
+        showBall()
+    }
+
+    @android.annotation.SuppressLint("ClickableViewAccessibility") // Touch-up delegates to performClick for accessibility.
+    private fun showBall() {
         removeOverlay()
+        panelOpen = false
         if (!alive) return
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12, 8, 12, 8)
-            setBackgroundColor(Color.rgb(245, 245, 245))
+        val size = FarmUi.dp(this, 60)
+        val ball = FrameLayout(this).apply {
+            background = FarmUi.shape(Color.argb(230, 54, 62, 58), size / 2f)
+            elevation = FarmUi.dp(this@FarmAccessibilityService, 6).toFloat()
+            contentDescription = "农场小白球，点击展开功能面板，可拖动位置"
+            isFocusable = true
+            isClickable = true
+            stateDescription = "已收起"
         }
-        layout.addView(TextView(this).apply {
-            text = "CLI · $cliModule $cliOptions\n${cliRun.message}"
-            setTextColor(Color.BLACK)
-            textSize = 13f
-            maxLines = 6
-        })
-        fun button(title: String, action: () -> Unit) {
-            layout.addView(Button(this).apply { text = title; setOnClickListener { action() } })
-        }
-        when {
-            cliRun.paused -> {
-                button("继续") { cliRun.resume() }
-                button("结束") { cliRun.end() }
+        ball.addView(View(this).apply {
+            background = FarmUi.shape(Color.rgb(210, 216, 211), size / 2f)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, FrameLayout.LayoutParams(FarmUi.dp(this, 42), FarmUi.dp(this, 42), Gravity.CENTER))
+        ball.addView(View(this).apply {
+            background = FarmUi.shape(Color.WHITE, size / 2f)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, FrameLayout.LayoutParams(FarmUi.dp(this, 30), FarmUi.dp(this, 30), Gravity.CENTER))
+        ball.setOnClickListener { showPanel() }
+        var downX = 0f
+        var downY = 0f
+        var originX = 0
+        var originY = 0
+        var dragging = false
+        ball.setOnTouchListener { view, event ->
+            val params = view.layoutParams as? WindowManager.LayoutParams ?: return@setOnTouchListener false
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX; downY = event.rawY
+                    originX = params.x; originY = params.y; dragging = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (kotlin.math.hypot(dx, dy) > ViewConfiguration.get(this).scaledTouchSlop) dragging = true
+                    if (dragging) {
+                        val bounds = overlayBounds(size, size)
+                        params.x = (originX + dx.toInt()).coerceIn(bounds.left, bounds.right)
+                        params.y = (originY + dy.toInt()).coerceIn(bounds.top, bounds.bottom)
+                        updateOverlay(view, params)
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (dragging) {
+                        val bounds = overlayBounds(size, size)
+                        params.x = if (params.x < (bounds.left + bounds.right) / 2) bounds.left else bounds.right
+                        ballX = params.x; ballY = params.y
+                        updateOverlay(view, params)
+                    } else if (event.actionMasked == MotionEvent.ACTION_UP) view.performClick()
+                    true
+                }
+                else -> false
             }
-            cliRun.busy -> {
-                button("暂停") { cliRun.pause() }
-                button("结束") { cliRun.end() }
-            }
-            else -> button("开始所选流程") { cliRun.start(cliModule, cliOptions) }
         }
-        attachOverlay(layout)
+        attachOverlay(ball, size, size)
+    }
+
+    private fun showPanel() {
+        removeOverlay()
+        panelOpen = true
+        if (!alive) return
+        val layout = FarmUi.column(this, 16).apply {
+            background = FarmUi.shape(Color.WHITE, FarmUi.dp(this@FarmAccessibilityService, 24).toFloat(), FarmUi.border)
+        }
+        fun text(value: String, size: Float = 15f, bold: Boolean = false) {
+            layout.addView(FarmUi.text(this, value, size, bold = bold))
+        }
+        fun button(title: String, style: FarmUi.ButtonStyle = FarmUi.ButtonStyle.SECONDARY, action: () -> Unit) {
+            layout.addView(FarmUi.button(this, title, style, action))
+        }
+        text(if (singleControls) "单次施肥验证" else "农场小助手", 22f, true)
+        if (singleControls) {
+            text(run.view.message)
+            button(if (run.view.paused) "继续验证" else "开始单次施肥验证", FarmUi.ButtonStyle.PRIMARY) {
+                if (run.view.paused) run.resume() else beginCountdown { run.start() }
+            }
+            if (run.view.paused) button("结束验证", FarmUi.ButtonStyle.DANGER) { run.end() }
+            else button("返回功能选择") { singleControls = false; showPanel() }
+        } else {
+            val preferences = getSharedPreferences("cli", MODE_PRIVATE)
+            var index = preferences.getInt("feature", 0).coerceIn(FarmFeatures.titles.indices)
+            text(when {
+                cliRun.paused -> "已暂停 · 可以继续或结束"
+                cliRun.busy -> "正在运行，可暂停或结束。"
+                else -> "选择功能，准备好后再开始。"
+            })
+            when {
+                cliRun.paused -> {
+                    button("继续运行", FarmUi.ButtonStyle.PRIMARY) { cliRun.resume() }
+                    button("结束运行", FarmUi.ButtonStyle.DANGER) { cliRun.end() }
+                }
+                cliRun.busy -> {
+                    button("暂停运行", FarmUi.ButtonStyle.PRIMARY) { cliRun.pause() }
+                    button("结束运行", FarmUi.ButtonStyle.DANGER) { cliRun.end() }
+                }
+                else -> {
+                    val selected = FarmUi.button(this, "切换功能：${FarmFeatures.titles[index]}") { }
+                    FarmUi.arrow(selected, expanded = false)
+                    selected.stateDescription = "已收起"
+                    selected.setOnClickListener {
+                        val choices = FarmUi.column(this, 0)
+                        FarmFeatures.titles.forEachIndexed { i, title ->
+                            val choice = FarmUi.choice(this, title) {
+                                index = i
+                                cliModule = FarmFeatures.module(i)
+                                cliOptions = FeatureSettings.options(preferences, i)
+                                preferences.edit().putInt("feature", i).apply()
+                                showPanel()
+                            }.apply { isChecked = i == index }
+                            choices.addView(FarmUi.feature(this, i, choice))
+                        }
+                        layout.removeView(selected)
+                        layout.addView(choices, 2)
+                    }
+                    layout.addView(selected)
+                    text(if (index == 0) "将打开支付宝与淘宝。" else "请先进入对应农场或游戏页面。")
+                    button("开始${FarmFeatures.titles[index]}", FarmUi.ButtonStyle.PRIMARY) {
+                        cliModule = FarmFeatures.module(index)
+                        cliOptions = FeatureSettings.options(preferences, index)
+                        val module = cliModule
+                        val options = cliOptions
+                        beginCountdown { cliRun.start(module, options) }
+                    }
+                }
+            }
+            text("音量上暂停 · 音量下结束\n运行时小白球隐藏，暂停后重新出现。", 14f)
+        }
+        button("收起面板") { showBall() }
+        button("移到另一侧") {
+            val size = FarmUi.dp(this, 60)
+            val bounds = overlayBounds(size, size)
+            ballX = if ((ballX ?: bounds.right) > (bounds.left + bounds.right) / 2) bounds.left else bounds.right
+            showBall()
+        }
+        val metrics = getSystemService(WindowManager::class.java).currentWindowMetrics
+        val safe = metrics.windowInsets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+        val width = minOf(FarmUi.dp(this, 320), metrics.bounds.width() - safe.left - safe.right - FarmUi.dp(this, 16))
+        val scroll = ScrollView(this).apply {
+            addView(layout)
+            isFillViewport = false
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_OUTSIDE) { showBall(); true } else false
+            }
+        }
+        val maxHeight = metrics.bounds.height() - safe.top - safe.bottom - FarmUi.dp(this, 24)
+        scroll.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.AT_MOST))
+        attachOverlay(scroll, width, scroll.measuredHeight.coerceAtMost(maxHeight))
+    }
+
+    private fun beginCountdown(action: () -> Unit) {
+        if (!alive || countdown.active || cliRun.busy || run.view.running || run.view.paused) return
+        removeOverlay()
+        renderCountdown()
+        if (overlay == null) return
+        countdown.start(onTick = { seconds ->
+            countdownNumber?.apply {
+                text = seconds.toString()
+                contentDescription = "任务将在${seconds}秒后开始"
+            }
+        }) {
+            removeOverlay()
+            if (alive) action()
+        }
+    }
+
+    private fun renderCountdown() {
+        removeOverlay(cancelCountdown = false)
+        val content = FarmUi.column(this, 16).apply { gravity = Gravity.CENTER_HORIZONTAL }
+        val circle = FrameLayout(this).apply {
+            background = FarmUi.shape(Color.rgb(232, 234, 232), FarmUi.dp(this@FarmAccessibilityService, 80).toFloat())
+        }
+        countdownNumber = FarmUi.text(this, countdown.seconds.coerceAtLeast(1).toString(), 64f, bold = true).apply {
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 0)
+            contentDescription = "任务开始倒计时"
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        circle.addView(countdownNumber, FrameLayout.LayoutParams(-1, -1))
+        content.addView(circle, LinearLayout.LayoutParams(FarmUi.dp(this, 160), FarmUi.dp(this, 160)))
+        val actions = LinearLayout(this)
+        actions.addView(FarmUi.button(this, "取消") {
+            countdown.cancel()
+            lastMessage = "已取消本次任务"
+            showBall()
+        }, LinearLayout.LayoutParams(0, -2, 1f).apply { marginEnd = FarmUi.dp(this@FarmAccessibilityService, 8) })
+        actions.addView(FarmUi.button(this, "跳过", FarmUi.ButtonStyle.PRIMARY) { countdown.skip() }, LinearLayout.LayoutParams(0, -2, 1f))
+        content.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = FarmUi.dp(this@FarmAccessibilityService, 24) })
+        val metrics = getSystemService(WindowManager::class.java).currentWindowMetrics
+        val safe = metrics.windowInsets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+        val width = minOf(FarmUi.dp(this, 288), metrics.bounds.width() - safe.left - safe.right - FarmUi.dp(this, 16))
+        val maxHeight = metrics.bounds.height() - safe.top - safe.bottom - FarmUi.dp(this, 16)
+        val scroll = ScrollView(this).apply { addView(content) }
+        scroll.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.AT_MOST))
+        attachOverlay(scroll, width, scroll.measuredHeight, centered = true)
+    }
+
+    private fun overlayBounds(width: Int, height: Int): Rect {
+        val metrics = getSystemService(WindowManager::class.java).currentWindowMetrics
+        val safe = metrics.windowInsets.getInsetsIgnoringVisibility(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+        val margin = FarmUi.dp(this, 8)
+        val left = safe.left + margin
+        val top = safe.top + margin
+        val right = (metrics.bounds.width() - safe.right - width - margin).coerceAtLeast(left)
+        val bottom = (metrics.bounds.height() - safe.bottom - height - margin).coerceAtLeast(top)
+        return Rect(left, top, right, bottom)
+    }
+
+    private fun updateOverlay(view: View, params: WindowManager.LayoutParams) {
+        try {
+            getSystemService(WindowManager::class.java).updateViewLayout(view, params)
+        } catch (error: RuntimeException) {
+            overlayFailure = "小白球位置更新失败：${error.javaClass.simpleName}"
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (countdown.active) renderCountdown()
+        else if (overlay != null) { if (panelOpen) showPanel() else showBall() }
     }
 
     override fun nowMillis() = SystemClock.elapsedRealtime()
@@ -182,39 +392,21 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
         keepTaskScreenOn(view.running)
         lastMessage = view.message
         removeOverlay()
-        if (!alive || !view.overlayVisible) return
-        val layout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(12, 8, 12, 8)
-            setBackgroundColor(Color.rgb(245, 245, 245))
-        }
-        layout.addView(TextView(this).apply {
-            text = view.message
-            setTextColor(Color.BLACK)
-            textSize = 13f
-            maxLines = 5
-        })
-        layout.addView(Button(this).apply {
-            text = if (view.paused) "继续" else "开始单次施肥验证"
-            setOnClickListener { if (view.paused) run.resume() else run.start() }
-        })
-        if (view.paused) layout.addView(Button(this).apply {
-            text = "结束"
-            setOnClickListener { run.end() }
-        })
-        attachOverlay(layout)
+        singleControls = true
+        if (alive && view.overlayVisible) showBall()
     }
 
-    private fun attachOverlay(layout: View) {
+    private fun attachOverlay(layout: View, width: Int, height: Int, centered: Boolean = false) {
+        val bounds = overlayBounds(width, height)
         val params = WindowManager.LayoutParams(
-            (260 * resources.displayMetrics.density).toInt(),
-            WindowManager.LayoutParams.WRAP_CONTENT,
+            width, height,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            y = (48 * resources.displayMetrics.density).toInt()
+            gravity = Gravity.TOP or Gravity.LEFT
+            x = if (centered) (bounds.left + bounds.right) / 2 else (ballX ?: bounds.right).coerceIn(bounds.left, bounds.right)
+            y = if (centered) (bounds.top + bounds.bottom) / 2 else (ballY ?: FarmUi.dp(this@FarmAccessibilityService, 160)).coerceIn(bounds.top, bounds.bottom)
         }
         try {
             getSystemService(WindowManager::class.java).addView(layout, params)
@@ -222,13 +414,16 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
             overlayFailure = null
         } catch (error: RuntimeException) {
             overlay = null
+            countdown.cancel()
             overlayFailure = "控制浮层不可用：${error.javaClass.simpleName}"
             lastMessage = overlayFailure
             if (cliRun.busy) cliRun.end()
         }
     }
 
-    private fun removeOverlay() {
+    private fun removeOverlay(cancelCountdown: Boolean = true) {
+        if (cancelCountdown) countdown.cancel()
+        countdownNumber = null
         overlay?.let {
             try {
                 getSystemService(WindowManager::class.java).removeView(it)
@@ -373,6 +568,7 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     }
 
     override fun onInterrupt() {
+        if (countdown.active) { countdown.cancel(); showBall() }
         cliRun.end()
         run.stop("无障碍服务中断")
     }
