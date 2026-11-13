@@ -4,8 +4,6 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import java.io.File
 
 class CliAutomationRun(private val service: FarmAccessibilityService) {
@@ -37,11 +35,8 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         service.hideControls()
         Thread({
             var result = "运行完成；详细结果见日志"
-            var recognizer: com.google.mlkit.vision.text.TextRecognizer? = null
             var wake: PowerManager.WakeLock? = null
             try {
-                val localRecognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-                recognizer = localRecognizer
                 val localWake = service.getSystemService(PowerManager::class.java).newWakeLock(
                     PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "babanongchang:cli",
                 )
@@ -50,7 +45,7 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
                 File(outputDirectory, "cli.log").writeText("")
                 localWake.acquire()
                 gate.checkpoint()
-                val bridge = CliAccessibilityBridge(service, gate, localRecognizer) { text ->
+                val bridge = CliAccessibilityBridge(service, gate) { text ->
                     synchronized(logBuffer) {
                         logBuffer.append(text)
                         if (logBuffer.length > 20000) logBuffer.delete(0, logBuffer.length - 20000)
@@ -65,7 +60,6 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
             } finally {
                 gate.stop()
                 wake?.let { if (it.isHeld) it.release() }
-                recognizer?.close()
                 runCatching { File(outputDirectory, "cli.log").appendText("\n$result\n") }
                 main.post {
                     busy = false

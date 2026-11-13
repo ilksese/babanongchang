@@ -56,13 +56,25 @@ APK 内嵌 Python，构建时直接打包仓库 `src/babanongchang`，与桌面 
 
 中文模型与 Python 依赖随 APK 打包，无网络权限，不上传截图或日志。诊断可能包含目标应用页面内容；只在用户手动选择的位置导出。清除应用数据会删除私有诊断文件。
 
+## 与 CLI 对齐的离线 OCR
+
+APK（含旧单次施肥入口）和 CLI 固定使用 RapidOCR 3.10.0，复用其完整的图像预处理、文字检测、方向分类、识别、字典解码、文字框处理及置信度输出。模型为默认的 PP-OCRv6 small 检测／识别和 mobile 方向分类；不再使用 ML Kit。
+
+Android 仅通过 ONNX Runtime Android 1.24.3 的 CPU 接口执行张量推理，Python 桥不重新实现 OCR 算法。文字框扩张使用与桌面 pyclipper 相同的 Clipper 6.4.2 原始源码。现有共享置信度过滤与淘宝滑动条继续有效，RapidOCR 自身默认也会过滤低于 0.5 的识别结果，因此滑动条低于 0.5 不会恢复已被引擎过滤的文字。
+
+构建任务 `prepareOcr` 通过仓库锁定的 uv 环境准备 CLI 的三份模型，复制到 APK 并生成 SHA-256 清单 `babanongchang_ocr_models/manifest.json`。首次构建可能下载模型；运行时只使用包内明确指定的模型路径，不下载模型，不需要网络。修改 RapidOCR 版本后，应重新生成对照图片的 CLI 期望结果并执行模拟器测试。
+
+`src/androidTest/assets/ocr.png` 为合成中文截图，`ocr.json` 为 CLI 实际输出。仪器测试验证 APK 无网络权限、五行文字一致、框坐标误差不超过 2 像素、置信度误差不超过 0.02。跨平台 OpenCV／ONNX Runtime 版本不同，不承诺任意截图的结果逐位相同。
+
 ## 构建与验证
 
-需要 JDK 17、Android SDK 36、Gradle Wrapper，以及可由 PATH 找到的 Python 3.10（或通过 Chaquopy 的 `buildPython` 配置）。首次构建需要下载 Gradle、Chaquopy 和 Python 依赖。
+需要 JDK 17、Android SDK 36、NDK、CMake 3.22+、Gradle Wrapper、uv，以及可由 PATH 找到的 Python 3.10（或通过 Chaquopy 的 `buildPython` 配置）。首次构建需要下载 Gradle、Chaquopy、Python 依赖及 OCR 模型。
 
 ```sh
 cd android
 ./gradlew testDebugUnitTest assembleDebug lintDebug
+# 已启动 Android 模拟器时，运行本机离线 OCR 与 CLI 截图对照（不操作支付宝／淘宝）
+./gradlew connectedDebugAndroidTest
 ```
 
 产物：`app/build/outputs/apk/debug/app-debug.apk`。支持 Android 11+ 的 arm64-v8a／x86_64；不支持 32 位设备。APK 内使用 Python 3.10、NumPy 1.26.2 和 OpenCV 4.5.1.48，以适配可用的 Android 预编译包；使用 tomli 兼容 TOML。桌面 CLI 仍由 uv 管理 Python 3.14。
@@ -74,6 +86,6 @@ uv run python -m unittest discover -s tests
 uv run babanongchang --help
 ```
 
-Android 控制状态单元测试覆盖暂停时间、旧页面坐标失效、暂停后结束与长等待取消；Python 适配测试覆盖各模块路由、本机 OCR、缩放坐标、前台变化、离线报告及取消时钟。OCR 使用 ML Kit 原始行置信度，继续应用共享代码的置信度阈值；不同 OCR 模型仍可能产生不同识别结果。
+Android 控制状态单元测试覆盖暂停时间、旧页面坐标失效、暂停后结束与长等待取消；Python 适配测试覆盖各模块路由、本机 OCR、缩放坐标、前台变化、离线报告及取消时钟。额外的仪器测试直接在 Android 上加载包内模型，对照 CLI 的图片识别输出。
 
 **验收限制：** 本轮构建与本地测试不等于实体手机验收。支付宝／淘宝真实页面、完整游戏流程、音量键可靠接收与拦截、厂商无障碍兼容性仍需真机验证。旧版单次施肥模拟器记录不能作为本版全套流程通过的证据。连续流程沿用 CLI 的消费与重试规则；请通过 `--max-clicks` 等参数控制首次实际运行范围。

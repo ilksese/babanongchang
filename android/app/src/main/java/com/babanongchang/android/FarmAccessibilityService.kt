@@ -25,9 +25,6 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognition
-import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 
 class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlatform {
     companion object {
@@ -45,9 +42,6 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     val cliRun = CliAutomationRun(this)
     private var cliModule = "all"
     private var cliOptions = ""
-    private val recognizer by lazy {
-        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-    }
     private var overlay: View? = null
     private var alive = false
     private var recognizing = false
@@ -285,31 +279,28 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
                         recognizing = false
                         return
                     }
-                    try {
-                        recognizer.process(InputImage.fromBitmap(bitmap, 0))
-                            .addOnCompleteListener(mainExecutor) { task ->
-                                if (!alive || !isCurrent()) {
-                                    bitmap.recycle()
-                                    recognizing = false
-                                    return@addOnCompleteListener
-                                }
-                                val result = if (task.isSuccessful) runCatching {
-                                    OcrFrame(bitmap.width, bitmap.height,
-                                        task.result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
-                                            line.boundingBox?.let {
-                                                OcrLine(line.text, Bounds(it.left, it.top, it.right, it.bottom))
-                                            }
-                                        })
-                                } else Result.failure(task.exception ?: IllegalStateException("OCR failed"))
-                                bitmap.recycle()
-                                recognizing = false
-                                callback(result)
+                    Thread({
+                        val result = runCatching {
+                            val png = java.io.ByteArrayOutputStream().use { output ->
+                                check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+                                output.toByteArray()
                             }
-                    } catch (error: Exception) {
+                            val lines = org.json.JSONArray(CliPython.get(this@FarmAccessibilityService)
+                                .getModule("babanongchang.android").callAttr("recognize_png", png).toString())
+                            OcrFrame(bitmap.width, bitmap.height, (0 until lines.length()).map { index ->
+                                val line = lines.getJSONArray(index)
+                                val box = line.getJSONArray(1)
+                                val xs = (0..3).map { box.getJSONArray(it).getDouble(0).toInt() }
+                                val ys = (0..3).map { box.getJSONArray(it).getDouble(1).toInt() }
+                                OcrLine(line.getString(0), Bounds(xs.min(), ys.min(), xs.max(), ys.max()))
+                            })
+                        }
                         bitmap.recycle()
-                        recognizing = false
-                        callback(Result.failure(error))
-                    }
+                        handler.post {
+                            recognizing = false
+                            if (alive && isCurrent()) callback(result)
+                        }
+                    }, "single-attempt-ocr").start()
                 }
             })
         } catch (error: Exception) {
@@ -387,7 +378,6 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
 
     override fun onDestroy() {
         disconnect()
-        recognizer.close()
         super.onDestroy()
     }
 }

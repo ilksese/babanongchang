@@ -7,7 +7,7 @@ requires-python = ">=3.14,<3.15"
 dependencies = [
     "onnxruntime>=1.20,<2",
     "opencv-python-headless>=4.10,<5",
-    "rapidocr>=3.2,<4",
+    "rapidocr==3.10.0",
 ]
 
 [project.scripts]

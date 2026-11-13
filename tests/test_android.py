@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
@@ -11,8 +12,23 @@ from babanongchang import android, runtime
 from babanongchang.handle import TextHandle
 
 
+def fake_engine(ocr):
+    def recognize(image):
+        png = cv2.imencode(".png", image)[1].tobytes()
+        lines = json.loads(str(ocr.bridge.recognize(png)))
+        return SimpleNamespace(txts=[line[0] for line in lines],
+                               boxes=[line[1] for line in lines],
+                               scores=[line[2] for line in lines])
+    engine = Mock(side_effect=recognize)
+    engine.text_det = engine.text_cls = engine.text_rec = None
+    return engine
+
+
 class AndroidDeviceTest(unittest.TestCase):
     def setUp(self):
+        loader = patch.object(android.AndroidOcr, "_load_engine", autospec=True, side_effect=fake_engine)
+        loader.start()
+        self.addCleanup(loader.stop)
         self.bridge = Mock()
         self.device = android.AndroidDevice(self.bridge)
 
@@ -67,6 +83,11 @@ class AndroidDeviceTest(unittest.TestCase):
 
 
 class AndroidEntryTest(unittest.TestCase):
+    def setUp(self):
+        loader = patch.object(android.AndroidOcr, "_load_engine", autospec=True, side_effect=fake_engine)
+        loader.start()
+        self.addCleanup(loader.stop)
+
     def test_taobao_confidence_is_applied_only_to_taobao(self):
         from babanongchang.cli import FarmAutomation
         from babanongchang.taobao import TaobaoAutomation, is_taobao_farm_page

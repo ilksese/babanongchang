@@ -9,9 +9,6 @@ import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
 import android.view.Display
-import com.google.android.gms.tasks.Tasks
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.TextRecognizer
 import org.json.JSONArray
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.CountDownLatch
@@ -21,7 +18,6 @@ import java.util.concurrent.TimeUnit
 class CliAccessibilityBridge(
     private val service: FarmAccessibilityService,
     private val control: CliRunControl,
-    private val recognizer: TextRecognizer,
     private val writeLog: (String) -> Unit,
 ) {
     private val main = Handler(Looper.getMainLooper())
@@ -34,6 +30,7 @@ class CliAccessibilityBridge(
     fun activeMillis() = control.activeMillis()
     fun sleepMillis(duration: Long) = control.sleepMillis(duration)
     fun log(text: String) = writeLog(text)
+    fun checkpoint() = control.checkpoint()
 
     private fun <T> onMain(action: ((Result<T>) -> Unit) -> Unit): T {
         control.checkpoint()
@@ -99,30 +96,6 @@ class CliAccessibilityBridge(
         lastCapture = activeMillis()
         observedRevision = revision
         bytes
-    }
-
-    fun recognize(png: ByteArray): String = synchronized(ioLock) {
-        control.checkpoint()
-        val bitmap = android.graphics.BitmapFactory.decodeByteArray(png, 0, png.size)
-            ?: error("OCR 图片无效")
-        val task = try {
-            recognizer.process(InputImage.fromBitmap(bitmap, 0)).addOnCompleteListener { bitmap.recycle() }
-        } catch (error: Exception) {
-            bitmap.recycle()
-            throw error
-        }
-        run {
-            val text = Tasks.await(task, 30, TimeUnit.SECONDS)
-            control.checkpoint()
-            val lines = JSONArray()
-            for (block in text.textBlocks) for (line in block.lines) {
-                val box = line.cornerPoints ?: continue
-                lines.put(JSONArray().put(line.text).put(JSONArray().apply {
-                    box.forEach { put(JSONArray().put(it.x).put(it.y)) }
-                }).put(line.confidence.toDouble()))
-            }
-            lines.toString()
-        }
     }
 
     fun tap(x: Int, y: Int) = gesture(x, y, x, y, 50)

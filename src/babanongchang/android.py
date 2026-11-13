@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import shlex
-from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -17,17 +16,33 @@ from babanongchang import runtime
 class AndroidOcr:
     def __init__(self, bridge):
         self.bridge = bridge
+        self.engine = None
+
+    def _load_engine(self):
+        import babanongchang_ocr_models
+        from rapidocr import RapidOCR
+
+        root = Path(babanongchang_ocr_models.__file__).parent
+        return RapidOCR(params={
+            f"{name}.model_path": str(root / f"{name}.onnx")
+            for name in ("Det", "Cls", "Rec")
+        })
 
     def __call__(self, image):
-        ok, encoded = cv2.imencode(".png", image)
-        if not ok:
-            raise RuntimeError("无法编码 OCR 图片")
-        lines = json.loads(str(self.bridge.recognize(encoded.tobytes())))
-        return SimpleNamespace(
-            txts=[line[0] for line in lines],
-            boxes=[line[1] for line in lines],
-            scores=[line[2] for line in lines],
-        )
+        self.bridge.checkpoint()
+        if self.engine is None:
+            self.engine = self._load_engine()
+        result = self.engine(image)
+        self.bridge.checkpoint()
+        return result
+
+    def close(self):
+        if self.engine is not None:
+            for name in ("text_det", "text_cls", "text_rec"):
+                model = getattr(self.engine, name)
+                if model is not None:
+                    model.session.session.close()
+            self.engine = None
 
 
 class AndroidDevice:
@@ -108,6 +123,8 @@ class AndroidScreenReader:
 
     def read(self, image):
         result = self.ocr(image)
+        if result.txts is None:
+            return []
         return [(text.replace(" ", ""), score, *map(int, np.asarray(box).mean(axis=0).round()))
                 for text, score, box in zip(result.txts, result.scores, result.boxes)]
 
@@ -152,9 +169,30 @@ def run(bridge, module, options, output_dir, taobao_min_score=0.75):
     finally:
         runtime.backend = None
         os.chdir(previous_directory)
+        device.ocr.close()
 
 
 def help_text():
     from babanongchang.cli import build_parser
 
     return build_parser().format_help()
+
+
+def recognize_png(png):
+    """The legacy single-attempt entry uses the same offline OCR as CLI flows."""
+    class Uncontrolled:
+        def checkpoint(self):
+            pass
+
+    image = cv2.imdecode(np.frombuffer(bytes(png), np.uint8), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError("无法解码 OCR 图片")
+    ocr = AndroidOcr(Uncontrolled())
+    try:
+        result = ocr(image)
+        return json.dumps([] if result.txts is None else [
+            [text, np.asarray(box).tolist(), float(score)]
+            for text, box, score in zip(result.txts, result.boxes, result.scores)
+        ])
+    finally:
+        ocr.close()
