@@ -48,6 +48,20 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     private var lastScreenshotMillis = -500L
     private val cliHeldKeys = mutableSetOf<Int>()
 
+    private var screenWakeLock: PowerManager.WakeLock? = null
+
+    @Suppress("DEPRECATION") // Tasks operate in other apps, so an Activity window flag cannot keep them awake.
+    fun keepTaskScreenOn(enabled: Boolean) {
+        if (enabled && alive) {
+            val wake = screenWakeLock ?: getSystemService(PowerManager::class.java).newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "babanongchang:task-screen",
+            ).also { screenWakeLock = it }
+            if (!wake.isHeld) wake.acquire()
+        } else {
+            screenWakeLock?.let { if (it.isHeld) it.release() }
+        }
+    }
+
     override fun onServiceConnected() {
         alive = true
         connected = this
@@ -165,6 +179,7 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     }
 
     override fun show(view: RunView) {
+        keepTaskScreenOn(view.running)
         lastMessage = view.message
         removeOverlay()
         if (!alive || !view.overlayVisible) return
@@ -364,6 +379,7 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
 
     private fun disconnect() {
         alive = false
+        keepTaskScreenOn(false)
         cliRun.end()
         if (connected === this) connected = null
         run.stop("无障碍服务断开")
@@ -374,6 +390,11 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
     override fun onUnbind(intent: Intent?): Boolean {
         disconnect()
         return super.onUnbind(intent)
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        keepTaskScreenOn(false)
+        super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {

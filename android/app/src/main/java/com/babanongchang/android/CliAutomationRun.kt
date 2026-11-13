@@ -2,7 +2,6 @@ package com.babanongchang.android
 
 import android.os.Handler
 import android.os.Looper
-import android.os.PowerManager
 import android.os.SystemClock
 import java.io.File
 
@@ -25,6 +24,13 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         service.cliUnavailableReason()?.let { message = it; service.showCliControls(); return }
         val taobaoConfidence = service.getSharedPreferences("cli", android.content.Context.MODE_PRIVATE)
             .getInt("taobao_confidence", 75).coerceIn(0, 100) / 100.0
+        try {
+            service.keepTaskScreenOn(true)
+        } catch (error: RuntimeException) {
+            message = "无法保持亮屏：${error.message ?: error.javaClass.simpleName}"
+            service.showCliControls()
+            return
+        }
         val gate = CliRunControl(SystemClock::elapsedRealtime)
         control = gate
         busy = true
@@ -35,15 +41,9 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         service.hideControls()
         Thread({
             var result = "运行完成；详细结果见日志"
-            var wake: PowerManager.WakeLock? = null
             try {
-                val localWake = service.getSystemService(PowerManager::class.java).newWakeLock(
-                    PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "babanongchang:cli",
-                )
-                wake = localWake
                 outputDirectory.mkdirs()
                 File(outputDirectory, "cli.log").writeText("")
-                localWake.acquire()
                 gate.checkpoint()
                 val bridge = CliAccessibilityBridge(service, gate) { text ->
                     synchronized(logBuffer) {
@@ -59,10 +59,10 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
                 synchronized(logBuffer) { logBuffer.append("\n$result\n") }
             } finally {
                 gate.stop()
-                wake?.let { if (it.isHeld) it.release() }
                 runCatching { File(outputDirectory, "cli.log").appendText("\n$result\n") }
                 main.post {
                     busy = false
+                    service.keepTaskScreenOn(false)
                     paused = false
                     control = null
                     message = result
@@ -76,12 +76,14 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         if (!busy || paused || ending) return
         control?.pause()
         paused = true
+        service.keepTaskScreenOn(false)
         message = "已暂停；继续时旧页面坐标失效会安全停止。已发出的手势无法撤销。"
         service.showCliControls()
     }
 
     fun resume() {
         if (!busy || !paused || ending) return
+        service.keepTaskScreenOn(true)
         paused = false
         service.hideControls()
         control?.resume()
@@ -90,6 +92,7 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
     fun end() {
         if (!busy || ending) return
         ending = true
+        service.keepTaskScreenOn(false)
         control?.stop()
         paused = false
         message = "正在结束并等待已发出操作返回；结果未确认时请查看目标应用"

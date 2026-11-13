@@ -188,4 +188,9 @@ class MainActivity : Activity() {
         handler.removeCallbacks(refresh)
         super.onPause()
     }
+
+    override fun onDestroy() {
+        if (isFinishing) FarmAccessibilityService.connected?.keepTaskScreenOn(false)
+        super.onDestroy()
+    }
 }
