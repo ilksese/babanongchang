@@ -89,6 +89,48 @@ class TaobaoAutomationTest(unittest.TestCase):
         automation.adb.swipe.assert_not_called()
         self.assertEqual(events, ["entered", "stayed", "returned"])
 
+    def test_browses_selected_products_for_eighteen_seconds_and_returns(self) -> None:
+        image = np.zeros((1600, 720, 3), dtype=np.uint8)
+        button = item("去完成", 614, 955)
+        titles = (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345))
+        before = ScreenSnapshot(
+            image, (*titles, item("逛精选好物(0/3)", 306, 934), button)
+        )
+        discovery = ScreenSnapshot(
+            image,
+            (item("浏览得奖励", 135, 101), item("下单得肥料+167000", 203, 671)),
+        )
+        automation = TaobaoAutomation.__new__(TaobaoAutomation)
+        automation.adb = Mock()
+        automation.scan = Mock(
+            side_effect=[before, ScreenSnapshot(image, titles)]
+        )
+        events = []
+
+        def tap_and_wait(point, matcher, **kwargs):
+            self.assertEqual(point, button.center)
+            self.assertIsNone(matcher(before))
+            self.assertIsNone(matcher(ScreenSnapshot(image, titles)))
+            self.assertIs(matcher(discovery), discovery)
+            events.append("entered")
+
+        automation.tap_and_wait = Mock(side_effect=tap_and_wait)
+        automation.return_to_fertilizer_tasks = Mock(
+            side_effect=lambda: events.append("returned")
+        )
+        with patch(
+            "babanongchang.taobao.swipe_browse",
+            side_effect=lambda adb, duration_seconds: events.append(
+                ("browsed", duration_seconds)
+            ),
+        ) as swipe:
+            automation.complete_supported_tasks()
+
+        automation.tap_and_wait.assert_called_once()
+        swipe.assert_called_once()
+        automation.return_to_fertilizer_tasks.assert_called_once_with()
+        self.assertEqual(events, ["entered", ("browsed", 18), "returned"])
+
     def test_reuses_current_task_list_without_starting_home_activity(self) -> None:
         snapshot = ScreenSnapshot(
             np.zeros((1600, 720, 3), dtype=np.uint8),
@@ -275,6 +317,19 @@ class TaobaoPageTest(unittest.TestCase):
         self.assertEqual(task.name, "搜一搜你心仪的宝贝")
         self.assertIs(task.operation, TaobaoTaskOperation.SEARCH)
         self.assertIs(button, search)
+
+    def test_finds_selected_products_browse_task(self) -> None:
+        button = item("去完成", 614, 955)
+        items = [item("逛精选好物(0/3)", 306, 934), button]
+
+        found = find_available_taobao_task(items, (1600, 720, 3))
+
+        self.assertIsNotNone(found)
+        assert found is not None
+        task, found_button = found
+        self.assertEqual(task.name, "逛精选好物")
+        self.assertIs(task.operation, TaobaoTaskOperation.SWIPE_BROWSE)
+        self.assertIs(found_button, button)
 
     def test_recognizes_search_reward_page(self) -> None:
         items = [item("搜索有福利", 125, 99), item("搜索后浏览立得奖励", 572, 95)]

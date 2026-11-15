@@ -41,6 +41,7 @@ TAOBAO_TASKS = (
         for name in TAOBAO_SEARCH_TASKS
     ),
     TaobaoTaskDefinition("发现精选好物", TaobaoTaskOperation.SWIPE_BROWSE),
+    TaobaoTaskDefinition("逛精选好物", TaobaoTaskOperation.SWIPE_BROWSE),
     TaobaoTaskDefinition("看严选推荐商品", TaobaoTaskOperation.STAY),
     TaobaoTaskDefinition("去淘金币", TaobaoTaskOperation.COINS_STAY),
 )
