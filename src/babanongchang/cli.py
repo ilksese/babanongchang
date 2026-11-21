@@ -141,7 +141,11 @@ def describe_recognized_tasks(
 
 class Adb:
     def __init__(self, serial: str | None = None) -> None:
-        self.prefix = ["adb"] + (["-s", serial] if serial else [])
+        self.prefix = ["adb"]
+        if serial is None:
+            serial = self._select_device()
+        if serial:
+            self.prefix += ["-s", serial]
         self._verify_device()
         self._run("shell", "input", "keyevent", "KEYCODE_WAKEUP")
         self._run("shell", "svc", "power", "stayon", "true")
@@ -162,6 +166,30 @@ class Adb:
         except subprocess.CalledProcessError as exc:
             detail = exc.stderr.decode("utf-8", errors="replace").strip()
             raise AutomationError(f"ADB 命令失败：{detail or '未知错误'}") from exc
+
+    def _select_device(self) -> str:
+        result = self._run("devices")
+        devices = [
+            line.split()[0]
+            for line in result.stdout.decode("utf-8", errors="replace").splitlines()[1:]
+            if len(line.split()) >= 2 and line.split()[1] == "device"
+        ]
+        if not devices:
+            raise AutomationError("ADB 设备未连接或未授权")
+        if len(devices) == 1:
+            return devices[0]
+
+        print("检测到多台已授权设备，请选择要使用的设备：")
+        for index, device in enumerate(devices, start=1):
+            print(f"  {index}. {device}")
+        while True:
+            try:
+                choice = input("请输入设备序号：").strip()
+            except EOFError as exc:
+                raise AutomationError("未选择 ADB 设备") from exc
+            if choice.isdigit() and 1 <= int(choice) <= len(devices):
+                return devices[int(choice) - 1]
+            print(f"请输入 1 到 {len(devices)} 之间的设备序号")
 
     def _verify_device(self) -> None:
         result = self._run("get-state")

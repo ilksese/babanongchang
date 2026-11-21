@@ -276,6 +276,39 @@ class InstalledPackagesTest(unittest.TestCase):
             adb.installed_packages()
 
 
+class DeviceSelectionTest(unittest.TestCase):
+    def make_adb(self, output: bytes) -> Adb:
+        adb = Adb.__new__(Adb)
+        adb.prefix = ["adb"]
+        adb._run = Mock(return_value=Mock(stdout=output))
+        return adb
+
+    def test_uses_the_only_authorized_device_without_prompting(self) -> None:
+        adb = self.make_adb(b"List of devices attached\nonly-device\tdevice\n")
+        with patch("builtins.input") as prompt:
+            self.assertEqual(adb._select_device(), "only-device")
+        prompt.assert_not_called()
+
+    def test_prompts_for_one_of_multiple_authorized_devices(self) -> None:
+        adb = self.make_adb(
+            b"List of devices attached\nfirst\tdevice\nsecond\tdevice\n"
+            b"unauthorized\tunauthorized\n"
+        )
+        with patch("builtins.input", return_value="2") as prompt:
+            self.assertEqual(adb._select_device(), "second")
+        prompt.assert_called_once_with("请输入设备序号：")
+
+    def test_reprompts_until_a_valid_device_number_is_entered(self) -> None:
+        adb = self.make_adb(b"List of devices attached\nfirst\tdevice\nsecond\tdevice\n")
+        with patch("builtins.input", side_effect=["0", "x", "1"]):
+            self.assertEqual(adb._select_device(), "first")
+
+    def test_fails_when_no_authorized_device_is_available(self) -> None:
+        adb = self.make_adb(b"List of devices attached\nwaiting\tunauthorized\n")
+        with self.assertRaisesRegex(AutomationError, "设备未连接或未授权"):
+            adb._select_device()
+
+
 class AlipayAutomationTest(unittest.TestCase):
     def test_runs_alipay_stages_in_order(self) -> None:
         automation = AlipayAutomation.__new__(AlipayAutomation)
