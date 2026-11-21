@@ -1,6 +1,6 @@
 import unittest
 
-from babanongchang.browsing import find_browse_iteration
+from babanongchang.automation.browsing import find_browse_iteration
 
 
 class FindBrowseIterationTest(unittest.TestCase):

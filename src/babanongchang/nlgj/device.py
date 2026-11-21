@@ -1,81 +1,32 @@
-"""ADB device access: screenshots, taps, and ad scrolling."""
-
 from __future__ import annotations
 
-import re
-import subprocess
 import threading
+from typing import Protocol
 
-import cv2
 import numpy as np
 
-from babanongchang.nlgj.recognition import normalize
-from babanongchang import runtime
-from babanongchang.adb_devices import list_adb_devices
+from babanongchang.runtime import Clock
 
 
-class Device:
-    def __init__(self, serial: str | None, adb: str = "adb") -> None:
-        try:
-            found = list_adb_devices(adb)
-        except FileNotFoundError as exc:
-            raise RuntimeError("adb not found. Install Android platform-tools first.") from exc
-        devices = [item.serial for item in found if item.state == "device"]
-        if serial is None:
-            if len(devices) != 1:
-                raise RuntimeError(f"Choose an authorized device using --serial; found {devices}")
-            serial = devices[0]
-        if serial not in devices:
-            raise RuntimeError(f"Device {serial} is not connected/authorized")
-        self.prefix = [adb, "-s", serial]
-        self.width = 720
-        self.height = 1600
-        self.package = self.foreground()
+class GameDevice(Protocol):
+    @property
+    def package(self) -> str: ...
 
-    def command(self, *args: str) -> bytes:
-        runtime.checkpoint()
-        result = subprocess.check_output(self.prefix + list(args), timeout=20)
-        runtime.checkpoint()
-        return result
+    def screenshot(self) -> np.ndarray: ...
 
-    def foreground(self) -> str:
-        output = self.command("shell", "dumpsys", "activity", "activities").decode(errors="replace")
-        for line in output.splitlines():
-            if "topResumedActivity=" in line or "mResumedActivity:" in line:
-                match = re.search(r"\bu\d+\s+([\w.]+)/", line)
-                if match:
-                    return match[1]
-        raise RuntimeError("Cannot identify foreground app; refusing to tap")
+    def tap(self, x: int, y: int) -> None: ...
 
-    def screenshot(self) -> np.ndarray:
-        data = self.command("exec-out", "screencap", "-p")
-        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise RuntimeError("Invalid ADB screenshot")
-        self.width = image.shape[1]
-        image = normalize(image)
-        self.height = image.shape[0]
-        return image
+    def swipe_ad(self, upwards: bool) -> None: ...
 
-    def tap(self, x: int, y: int) -> None:
-        if self.foreground() != self.package:
-            raise RuntimeError("Foreground app changed; stopping instead of tapping another app")
-        ratio = self.width / 720
-        self.command("shell", "input", "tap", str(round(x * ratio)), str(round(y * ratio)))
 
-    def swipe_ad(self, upwards: bool) -> None:
-        if self.foreground() != self.package:
-            raise RuntimeError("Foreground app changed; stopping ad browsing")
-        ratio = self.width / 720
-        x = round(360 * ratio)
-        y_bottom, y_top = round(self.height * .78 * ratio), round(self.height * .30 * ratio)
-        start, end = (y_bottom, y_top) if upwards else (y_top, y_bottom)
-        self.command("shell", "input", "swipe", str(x), str(start), str(x), str(end), "650")
+class GameReader(Protocol):
+    def read(self, image: np.ndarray) -> list[tuple[str, float, int, int]]: ...
 
 
 class AdScroller:
-    def __init__(self, device: Device) -> None:
+    def __init__(self, device: GameDevice, clock: Clock) -> None:
         self.device = device
+        self.clock = clock
         self.stopped = threading.Event()
         self.error = None
         self.swipes = 0
@@ -85,11 +36,11 @@ class AdScroller:
         upwards = True
         try:
             while not self.stopped.is_set():
-                runtime.checkpoint()
+                self.clock.checkpoint()
                 self.device.swipe_ad(upwards)
                 self.swipes += 1
                 upwards = not upwards
-        except Exception as exc:
+        except (Exception, KeyboardInterrupt) as exc:
             self.error = exc
             self.stopped.set()
 

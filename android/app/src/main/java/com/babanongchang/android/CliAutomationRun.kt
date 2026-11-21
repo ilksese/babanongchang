@@ -22,8 +22,10 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
     fun start(module: String, options: String) {
         if (busy) return
         service.cliUnavailableReason()?.let { message = it; service.showCliControls(); return }
-        val taobaoConfidence = service.getSharedPreferences("cli", android.content.Context.MODE_PRIVATE)
-            .getInt("taobao_confidence", 75).coerceIn(0, 100) / 100.0
+        val preferences = service.getSharedPreferences("cli", android.content.Context.MODE_PRIVATE)
+        val taobaoConfidence = if (preferences.contains("taobao_confidence")) {
+            preferences.getInt("taobao_confidence", 75).coerceIn(0, 100) / 100.0
+        } else null
         try {
             service.keepTaskScreenOn(true)
         } catch (error: RuntimeException) {
@@ -56,8 +58,12 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
                     history.append(checkNotNull(record).id, text)
                     File(outputDirectory, "cli.log").appendText(text)
                 }
-                CliPython.get(service).getModule("babanongchang.android")
-                    .callAttr("run", bridge, module, options, outputDirectory.absolutePath, taobaoConfidence)
+                val python = CliPython.get(service).getModule("babanongchang.android")
+                if (taobaoConfidence == null) {
+                    python.callAttr("run", bridge, module, options, outputDirectory.absolutePath)
+                } else {
+                    python.callAttr("run", bridge, module, options, outputDirectory.absolutePath, taobaoConfidence)
+                }
             } catch (error: Exception) {
                 result = "已停止：${error.message ?: error.javaClass.simpleName}"
             } finally {

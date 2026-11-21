@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 import time
 
+from babanongchang.runtime import Clock, SYSTEM_CLOCK
+
 
 CANCEL_FILE_ENV = "BABANONGCHANG_CANCEL_FILE"
 
@@ -19,12 +21,12 @@ class DesktopRuntimeBackend:
         if self.cancel_file.exists():
             raise KeyboardInterrupt
 
-    def activeMillis(self) -> int:
+    def monotonic(self) -> float:
         self.checkpoint()
-        return round((time.monotonic() - self.started) * 1000)
+        return time.monotonic() - self.started
 
-    def sleepMillis(self, duration: int) -> None:
-        deadline = time.monotonic() + duration / 1000
+    def sleep(self, seconds: float) -> None:
+        deadline = time.monotonic() + seconds
         while True:
             self.checkpoint()
             remaining = deadline - time.monotonic()
@@ -33,11 +35,6 @@ class DesktopRuntimeBackend:
             time.sleep(min(remaining, 0.1))
 
 
-def install_from_environment() -> bool:
+def clock_from_environment() -> Clock:
     path = os.environ.get(CANCEL_FILE_ENV)
-    if not path:
-        return False
-    from babanongchang import runtime
-
-    runtime.backend = DesktopRuntimeBackend(Path(path))
-    return True
+    return DesktopRuntimeBackend(Path(path)) if path else SYSTEM_CLOCK

@@ -121,7 +121,7 @@ class DesktopCancellationTest(unittest.TestCase):
             backend = DesktopRuntimeBackend(cancel)
             cancel.touch()
             with self.assertRaises(KeyboardInterrupt):
-                backend.sleepMillis(1000)
+                backend.sleep(1)
 
     def test_task_process_streams_output_and_reports_exit(self) -> None:
         events = queue.Queue()

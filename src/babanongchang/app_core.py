@@ -15,6 +15,8 @@ import threading
 from typing import Callable, Mapping
 
 from babanongchang.desktop_runtime import CANCEL_FILE_ENV
+from babanongchang.nlgj.options import GameOptions
+from babanongchang.workflow import MIN_BROWSE_SECONDS, FarmOptions
 
 
 @dataclass(frozen=True)
@@ -38,28 +40,28 @@ class FeatureSpec:
 
 
 COMMON = (
-    FieldSpec("threshold", "停止施肥的肥料余额", "600", "int", 0),
-    FieldSpec("browse_seconds", "浏览时长（秒）", "18", minimum=15),
+    FieldSpec("threshold", "停止施肥的肥料余额", str(FarmOptions.threshold), "int", 0),
+    FieldSpec("browse_seconds", "浏览时长（秒）", f"{FarmOptions.browse_seconds:g}", minimum=MIN_BROWSE_SECONDS),
     FieldSpec("max_clicks", "最多施肥次数（留空不限）", "", "optional_int", 1),
 )
 
 NLGJ_FIELDS = (
     FieldSpec("target", "目标关卡（留空按次数）", "", "optional_int", 1),
-    FieldSpec("levels", "通关次数", "3", "int", 0),
-    FieldSpec("max_minutes", "最长运行时间（分钟）", "15", minimum=0.01),
-    FieldSpec("mode", "点击模式", "safe", "choice", options=("safe", "fast")),
-    FieldSpec("delay", "点击间隔（秒）", "0.65", minimum=0.01, advanced=True),
-    FieldSpec("idle_timeout", "页面等待时限（秒）", "35", minimum=0.01, advanced=True),
-    FieldSpec("max_restarts", "最多重开次数", "0", "int", 0, advanced=True),
-    FieldSpec("streak_policy", "连胜策略", "coins-or-abandon", "choice", options=("coins-or-abandon", "stop"), advanced=True),
-    FieldSpec("revive_ads", "允许广告复活", True, "bool", advanced=True),
-    FieldSpec("ad_timeout", "广告等待时限（秒）", "180", minimum=0.01, advanced=True),
-    FieldSpec("board_top", "棋盘顶部比例", "0.146", minimum=0, maximum=1, advanced=True),
-    FieldSpec("board_bottom", "棋盘底部比例", "0.824", minimum=0, maximum=1, advanced=True),
-    FieldSpec("output", "输出目录", "artifacts/nlgj", "directory", advanced=True),
-    FieldSpec("dry_run", "仅查看设备，不点击", False, "bool", advanced=True),
+    FieldSpec("levels", "通关次数", str(GameOptions.levels), "int", 0),
+    FieldSpec("max_minutes", "最长运行时间（分钟）", f"{GameOptions.max_minutes:g}", minimum=0.01),
+    FieldSpec("mode", "点击模式", GameOptions.mode, "choice", options=("safe", "fast")),
+    FieldSpec("delay", "点击间隔（秒）", f"{GameOptions.delay:g}", minimum=0.01, advanced=True),
+    FieldSpec("idle_timeout", "页面等待时限（秒）", f"{GameOptions.idle_timeout:g}", minimum=0.01, advanced=True),
+    FieldSpec("max_restarts", "最多重开次数", str(GameOptions.max_restarts), "int", 0, advanced=True),
+    FieldSpec("streak_policy", "连胜策略", GameOptions.streak_policy, "choice", options=("coins-or-abandon", "stop"), advanced=True),
+    FieldSpec("revive_ads", "允许广告复活", GameOptions.revive_ads, "bool", advanced=True),
+    FieldSpec("ad_timeout", "广告等待时限（秒）", f"{GameOptions.ad_timeout:g}", minimum=0.01, advanced=True),
+    FieldSpec("board_top", "棋盘顶部比例", f"{GameOptions.board_top:g}", minimum=0, maximum=1, advanced=True),
+    FieldSpec("board_bottom", "棋盘底部比例", f"{GameOptions.board_bottom:g}", minimum=0, maximum=1, advanced=True),
+    FieldSpec("output", "输出目录", GameOptions.output.as_posix(), "directory", advanced=True),
+    FieldSpec("dry_run", "仅查看设备，不点击", GameOptions.dry_run, "bool", advanced=True),
     FieldSpec("screenshot", "离线截图", "", "file"),
-    FieldSpec("ocr", "离线报告包含 OCR", False, "bool", advanced=True),
+    FieldSpec("ocr", "离线报告包含 OCR", GameOptions.ocr, "bool", advanced=True),
     FieldSpec("adb", "ADB 命令或路径", "adb", "text", advanced=True),
 )
 

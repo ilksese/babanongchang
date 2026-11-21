@@ -6,7 +6,7 @@ from pathlib import Path
 import shutil
 import sys
 
-from babanongchang.handle import RapidOCR
+from rapidocr import RapidOCR
 
 
 def prepare(destination):

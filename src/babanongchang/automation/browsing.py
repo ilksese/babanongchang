@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import re
-from babanongchang import runtime as time
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 import numpy as np
+
+from babanongchang.runtime import Clock, SYSTEM_CLOCK
 
 
 class SwipeDevice(Protocol):
@@ -22,7 +23,10 @@ def find_browse_iteration(texts: Iterable[str]) -> int | None:
     return max(positive_iterations, default=None)
 
 
-def swipe_browse(device: SwipeDevice, duration_seconds: float = 18) -> None:
+def swipe_browse(
+    device: SwipeDevice, duration_seconds: float = 18, *,
+    clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = print,
+) -> None:
     """在当前页面上下往复滑动指定时间。"""
     if duration_seconds <= 0:
         raise ValueError("浏览时长必须大于 0")
@@ -31,12 +35,12 @@ def swipe_browse(device: SwipeDevice, duration_seconds: float = 18) -> None:
     height, width = image.shape[:2]
     upper = (width // 2, int(height * 0.36))
     lower = (width // 2, int(height * 0.74))
-    deadline = time.monotonic() + duration_seconds
+    deadline = clock.monotonic() + duration_seconds
     downward = True
-    print(f"开始上下往复滑动 {duration_seconds:g} 秒")
-    while time.monotonic() < deadline:
+    log(f"开始上下往复滑动 {duration_seconds:g} 秒")
+    while clock.monotonic() < deadline:
         start, end = (upper, lower) if downward else (lower, upper)
         device.swipe(start, end, duration_ms=650)
         downward = not downward
-        time.sleep(0.2)
-    print("浏览时间已满足，准备返回")
+        clock.sleep(0.2)
+    log("浏览时间已满足，准备返回")

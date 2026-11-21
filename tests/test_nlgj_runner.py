@@ -1,4 +1,3 @@
-import argparse
 from contextlib import ExitStack
 import tempfile
 from pathlib import Path
@@ -9,6 +8,7 @@ from unittest.mock import Mock, patch
 import numpy as np
 
 from babanongchang.nlgj import runner
+from babanongchang.nlgj.options import GameOptions
 
 
 class TargetPriorityTest(unittest.TestCase):
@@ -21,16 +21,14 @@ class TargetPriorityTest(unittest.TestCase):
         reader = Mock()
         reader.read.side_effect = [[("关卡279", .99, 0, 0)], [("下一关", .99, 90, 90)]]
         with tempfile.TemporaryDirectory() as output, ExitStack() as stack:
-            args = argparse.Namespace(
-                output=Path(output), screenshot=None, serial=None, adb="adb",
+            options = GameOptions(
+                output=Path(output),
                 max_minutes=max_minutes, target=target, levels=1, mode="fast",
                 board_top=.165, board_bottom=.83, dry_run=False,
                 revive_ads=False, streak_policy="stop", max_restarts=0,
                 idle_timeout=10000,
             )
             patches = {
-                "Device": Mock(return_value=device),
-                "ScreenReader": Mock(return_value=reader),
                 "recognize": Mock(side_effect=[board, board, victory]),
                 "dark_board": Mock(return_value=np.zeros((100, 100), np.uint8)),
                 "white_board_background": Mock(return_value=True),
@@ -44,11 +42,11 @@ class TargetPriorityTest(unittest.TestCase):
             for name, value in patches.items():
                 stack.enter_context(patch.object(runner, name, value))
             stack.enter_context(patch.object(runner.cv2, "imwrite", return_value=True))
-            stack.enter_context(patch.object(runner.time, "sleep"))
-            stack.enter_context(patch.object(runner.time, "monotonic", side_effect=range(0, 10000, 61)))
+            clock = Mock()
+            clock.monotonic.side_effect = range(0, 10000, 61)
             error = None
             try:
-                runner.play(args)
+                runner.play(options, device=device, reader=reader, clock=clock)
             except RuntimeError as exc:
                 error = str(exc)
             return error, (Path(output) / "events.jsonl").read_text()

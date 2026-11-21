@@ -2,6 +2,8 @@
 
 APK 内嵌 Python，构建时直接打包仓库 `src/babanongchang`，与桌面 CLI 共用自动化流程、任务池、页面等待和游戏算法。运行时通过 Android 无障碍服务完成本机截图、中文 OCR、手势、返回及应用启动，不需要电脑、ADB、Root 或服务器。
 
+APK 在原有 Kotlin 桥接后直接调用共享 Python 流程。农场运行读取应用私有目录 `files/cli-output/babanongchang.toml`，文件缺失时使用默认值；相对诊断和离线截图路径以 `files/cli-output` 为基准。
+
 ## 功能对应
 
 | APK 选择 | CLI 对应 | 行为与参数 |
@@ -10,7 +12,7 @@ APK 内嵌 Python，构建时直接打包仓库 `src/babanongchang`，与桌面 
 | 支付宝：连续施肥 | `fertilize` | `--threshold`、`--max-clicks` |
 | 支付宝：逛农货 | `goods` | `--browse-seconds` |
 | 支付宝：任务池 | `tasks` | 共用 `TASK_POOL` 与全部已注册执行器 |
-| 淘宝：完整流程 | `taobao` | 主页导航、任务与施肥，与 CLI 保持一致 |
+| 淘宝：完整流程 | `taobao` | 从主页进入芭芭农场并执行已支持的肥料任务，与 CLI 保持一致 |
 | 游戏：挪了个箭 | `games --nlgj` | safe／fast、目标关卡、通关次数、时限、复活广告、连胜、重开限制、棋盘区域与诊断 |
 
 原有单次施肥验证入口保留，它使用独立的严格页面验证，不代表新的连续 CLI 流程也具有相同的单次限制或余额减少确认机制。

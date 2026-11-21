@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from babanongchang import runtime as time
+from babanongchang.runtime import Clock, SYSTEM_CLOCK
 
-from babanongchang.nlgj.device import Device
+from babanongchang.nlgj.device import GameDevice
 from babanongchang.nlgj.models import Board
 from babanongchang.nlgj.overlay import tap_point
 
@@ -29,15 +29,15 @@ def fast_sequence(board: Board) -> list[tuple[int, int, int]]:
     return sequence
 
 
-def tap_sequence(device: Device, sequence: list[tuple[int, int, int]],
+def tap_sequence(device: GameDevice, sequence: list[tuple[int, int, int]],
                  on_tap: Callable[[int, int, int, int], None],
-                 interval: float = FAST_TAP_INTERVAL) -> None:
+                 interval: float = FAST_TAP_INTERVAL, *, clock: Clock = SYSTEM_CLOCK) -> None:
     # Start-to-start cadence; taps are synchronous, so two never overlap.
-    next_at = time.monotonic()
+    next_at = clock.monotonic()
     for index, (label, x, y) in enumerate(sequence):
-        delay = next_at - time.monotonic()
+        delay = next_at - clock.monotonic()
         if delay > 0:
-            time.sleep(delay)
-        next_at = time.monotonic() + interval
+            clock.sleep(delay)
+        next_at = clock.monotonic() + interval
         on_tap(index, label, x, y)
         device.tap(x, y)

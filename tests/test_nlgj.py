@@ -5,7 +5,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import cv2
 import numpy as np
@@ -34,7 +34,7 @@ class NlgjIntegrationTest(unittest.TestCase):
                 patch("sys.argv", ["babanongchang", "games", "--nlgj",
                                    "--screenshot", str(image), "--output", str(output)]),
                 patch("babanongchang.cli.Adb") as adb,
-                patch("babanongchang.nlgj.runner.Device") as device,
+                patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 main()
@@ -51,12 +51,15 @@ class NlgjIntegrationTest(unittest.TestCase):
             patch("sys.argv", ["babanongchang", "games", "--nlgj", "--serial", "device",
                                "--mode", "fast", "--target", "100", "--no-revive-ads"]),
             patch("babanongchang.cli.Adb") as adb,
+            patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
             patch("babanongchang.nlgj.runner.play") as play,
         ):
             main()
         adb.assert_not_called()
         args = play.call_args.args[0]
-        self.assertEqual((args.serial, args.mode, args.target), ("device", "fast", 100))
+        device.assert_called_once_with("device", "adb", clock=ANY)
+        self.assertIs(play.call_args.kwargs["device"], device.return_value)
+        self.assertEqual((args.mode, args.target), ("fast", 100))
         self.assertFalse(args.revive_ads)
 
     def test_invalid_selection_and_options_never_access_device(self):
@@ -71,7 +74,7 @@ class NlgjIntegrationTest(unittest.TestCase):
                 self.subTest(options=options),
                 patch("sys.argv", ["babanongchang", *options]),
                 patch("babanongchang.cli.Adb") as adb,
-                patch("babanongchang.nlgj.runner.Device") as device,
+                patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
                 contextlib.redirect_stderr(io.StringIO()),
                 self.assertRaises(SystemExit),
             ):
@@ -82,6 +85,7 @@ class NlgjIntegrationTest(unittest.TestCase):
     def test_runtime_failure_becomes_safe_exit(self):
         with (
             patch("sys.argv", ["babanongchang", "games", "--nlgj"]),
+            patch("babanongchang.adapters.adb_game.AdbGameDevice"),
             patch("babanongchang.nlgj.runner.play", side_effect=RuntimeError("foreground changed")),
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit) as error,

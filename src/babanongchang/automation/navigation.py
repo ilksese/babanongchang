@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from babanongchang import runtime as time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
-from babanongchang.config import PROJECT_CONFIG
-from babanongchang.handle import ScreenSnapshot, WaitTimeoutError
+from babanongchang.config import ProjectConfig
+from babanongchang.automation.handle import ScreenSnapshot, WaitTimeoutError
+from babanongchang.runtime import Clock, SYSTEM_CLOCK
 
 
 class BackDevice(Protocol):
@@ -28,10 +28,11 @@ def back_until(
     handle: ScreenHandle,
     predicate: Callable[[ScreenSnapshot], bool],
     *,
-    timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+    timeout: int = ProjectConfig().recognition_timeout_ms,
     interval: int = 1000,
     max_backs: int | None = None,
     error: str = "多次返回后仍未进入目标页面",
+    clock: Clock = SYSTEM_CLOCK,
 ) -> BackResult:
     """逐次返回并重新识别，直到目标页面出现。"""
     if timeout <= 0 or interval <= 0:
@@ -39,9 +40,9 @@ def back_until(
     if max_backs is not None and max_backs < 1:
         raise ValueError("max_backs 必须大于 0")
 
-    deadline = time.monotonic() + timeout / 1000
+    deadline = clock.monotonic() + timeout / 1000
     back_count = 0
-    while time.monotonic() < deadline:
+    while clock.monotonic() < deadline:
         snapshot = handle.scan()
         if predicate(snapshot):
             return BackResult(snapshot=snapshot, back_count=back_count)
@@ -49,5 +50,5 @@ def back_until(
             break
         device.back()
         back_count += 1
-        time.sleep(interval / 1000)
+        clock.sleep(interval / 1000)
     raise WaitTimeoutError(error)

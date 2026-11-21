@@ -35,13 +35,14 @@ object FeatureSettings {
     fun options(preferences: SharedPreferences, index: Int): String {
         val args = mutableListOf<String>()
         numbers(index).forEach { field ->
-            val value = value(preferences, index, field)
-            if (value.isNotBlank()) args += "--${field.key} $value"
+            val saved = preferences.getString(key(index, field.key), null)
+            if (saved != null && saved.isNotBlank() && field.valid(saved)) args += "--${field.key} $saved"
         }
         if (index == 6) {
-            val mode = preferences.getString(key(index, "mode"), "safe").takeIf { it == "safe" || it == "fast" } ?: "safe"
-            val streak = preferences.getString(key(index, "streak-policy"), "coins-or-abandon").takeIf { it == "coins-or-abandon" || it == "stop" } ?: "coins-or-abandon"
-            args += "--mode $mode --streak-policy $streak"
+            val mode = preferences.getString(key(index, "mode"), null)
+            val streak = preferences.getString(key(index, "streak-policy"), null)
+            if (mode == "safe" || mode == "fast") args += "--mode $mode"
+            if (streak == "coins-or-abandon" || streak == "stop") args += "--streak-policy $streak"
             if (!preferences.getBoolean(key(index, "revive-ads"), true)) args += "--no-revive-ads"
             if (preferences.getBoolean(key(index, "dry-run"), false)) args += "--dry-run"
             if (preferences.getBoolean(key(index, "offline"), false)) {

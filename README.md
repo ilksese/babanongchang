@@ -78,7 +78,7 @@ uv run babanongchang games --nlgj --screenshot image.png --ocr
 - 对有“去完成”按钮的任务浏览 18 秒，返回后领取奖励并等待任务刷新。
 - 重复执行当天可用次数，直到任务池中的浏览任务均无可执行按钮。
 
-任务规则统一注册在 `src/babanongchang/task_pool.py`：
+支付宝任务规则统一注册在 [`farm/alipay/task_pool.py`](src/babanongchang/farm/alipay/task_pool.py)：
 
 - `TaskMatcher(fixed_text=...)` 匹配固定文案。
 - `TaskMatcher(pattern=...)` 使用正则表达式匹配动态文案。
@@ -86,7 +86,7 @@ uv run babanongchang games --nlgj --screenshot image.png --ocr
 - 当前支持 `SWIPE_BROWSE`（上下滑动浏览）操作，默认时长为 18 秒，每个任务可单独覆盖。
 - 浏览页面出现阿拉伯数字形式的“第 n 次”时，本轮时长按任务配置时长乘以 `n` 计算；例如默认配置下“第3次”浏览 54 秒。
 
-通用上下滑动功能位于 `src/babanongchang/browsing.py`。任务执行策略位于 `src/babanongchang/task_executors.py`，目前提供：
+通用上下滑动功能位于 [`automation/browsing.py`](src/babanongchang/automation/browsing.py)。支付宝任务执行策略位于 [`farm/alipay/task_executors.py`](src/babanongchang/farm/alipay/task_executors.py)，目前提供：
 
 - `SwipeBrowseExecutor`：进入页面后按配置时长滑动浏览。
 - `ClickAndReturnExecutor`：进入页面并等待跳转完成，随后由公共流程立即返回任务列表。
@@ -107,7 +107,7 @@ uv run babanongchang games --nlgj --screenshot image.png --ocr
 
 APK 已接入全部 CLI 业务入口：支付宝连续施肥、逛农货、任务池、淘宝完整流程及挪了个箭。手机端直接复用 Python 自动化逻辑，通过无障碍服务完成本机操作，无需连接电脑或 ADB。
 
-应用中选择功能并填写 CLI 附加参数；支持日志、挪了个箭离线截图识别和诊断导出。构建、使用及真机验收限制见 [Android 说明](android/README.md)。
+应用中选择功能并在对应设置页调整参数；支持日志、挪了个箭离线截图识别和诊断导出。构建、使用及真机验收限制见 [Android 说明](android/README.md)。
 
 ## 环境
 
@@ -165,7 +165,7 @@ uv run babanongchang fertilize --max-clicks 1
 
 脚本启动时会主动唤醒设备，并在运行期间通过 ADB 强制保持亮屏；退出时会恢复系统自动休眠。运行前仍需手动解锁手机。总工作流会自动进入农场；单独执行 `fertilize`、`goods` 或 `tasks` 时，仍需先打开对应的支付宝芭芭农场页面。
 
-公共 OCR 文案操作位于 `src/babanongchang/handle.py` 的 `TextHandle`，`FarmAutomation` 通过继承复用：
+公共 OCR 文案操作位于 [`automation/handle.py`](src/babanongchang/automation/handle.py) 的 `TextHandle`，支付宝和淘宝流程各自组合使用：
 
 - `scan()`：截取当前屏幕并执行 OCR，返回包含图片和文字项的 `ScreenSnapshot`。
 - `find_text()` / `find_texts()` / `has_text()`：查找单项、全部匹配项或判断文案是否存在，支持精确匹配和相对屏幕区域过滤。
@@ -177,9 +177,9 @@ uv run babanongchang fertilize --max-clicks 1
 - `click_text(text="", wait=True, timeout=10000)`：等待并点击文案，返回点击坐标；`wait=False` 时只识别当前屏幕一次。
 - `tap_and_wait()` / `click_text_and_wait()`：只点击一次并等待目标页面，等待期间不会重复点击。
 
-通用返回操作位于 `src/babanongchang/navigation.py`：`back_until()` 每次返回后重新识别页面，直到目标页面出现或超时。
+通用返回操作位于 [`automation/navigation.py`](src/babanongchang/automation/navigation.py)：`back_until()` 每次返回后重新识别页面，直到目标页面出现或超时。
 
-项目级配置位于根目录 `babanongchang.toml`，在进程启动时读取：
+每次运行农场任务前，CLI 从工作目录读取 `babanongchang.toml`；从仓库根目录启动时使用仓库内的配置：
 
 ```toml
 [ocr]
@@ -189,6 +189,8 @@ recognition_timeout_ms = 10000
 
 - `screenshot_interval_ms`：等待 OCR 文案时连续截图的间隔，默认 200 毫秒。
 - `recognition_timeout_ms`：OCR 文案等待的默认超时，默认 10 秒。
+
+CLI 和 Android 都调用共享的 [`workflow.run_farm`](src/babanongchang/workflow.py) 或 [`nlgj.runner.play`](src/babanongchang/nlgj/runner.py)。`farm/alipay/` 和 `farm/taobao/` 各自维护页面与任务规则，`automation/` 提供公共识别和等待，`adapters/` 封装设备和 OCR。运行入口负责加载配置并传入本次运行的时钟与日志；桌面界面继续使用 CLI 子进程。
 
 扫描任务列表时会逐屏输出命中的任务、操作类型和按钮状态，例如：
 

@@ -140,7 +140,7 @@ class FeatureSettingsActivity : Activity() {
             ocr.addView(FarmUi.text(this, "一键照料与淘宝农场共用此设置。默认 0.75，调低可能增加误识别。", 14f))
             ocr.addView(FarmUi.button(this, "恢复默认识别置信度", FarmUi.ButtonStyle.TEXT) {
                 confidence.progress = 75
-                preferences.edit().putInt("taobao_confidence", 75).apply()
+                preferences.edit().remove("taobao_confidence").apply()
                 saved.text = "已恢复默认并自动保存。"
             })
         }

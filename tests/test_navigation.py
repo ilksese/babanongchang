@@ -2,8 +2,8 @@ import unittest
 
 import numpy as np
 
-from babanongchang.handle import OcrText, ScreenSnapshot, TextHandle
-from babanongchang.navigation import back_until
+from babanongchang.automation.handle import OcrText, ScreenSnapshot, TextHandle
+from babanongchang.automation.navigation import back_until
 
 
 IMAGE = np.zeros((1600, 720, 3), dtype=np.uint8)
