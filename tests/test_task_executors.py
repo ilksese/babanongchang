@@ -1,11 +1,11 @@
 import unittest
 
-from babanongchang.task_executors import (
+from babanongchang.farm.alipay.task_executors import (
     TASK_EXECUTORS,
     ClickAndReturnExecutor,
     SwipeBrowseExecutor,
 )
-from babanongchang.task_pool import TASK_POOL, TaskDefinition, TaskMatcher, TaskOperation
+from babanongchang.farm.alipay.task_pool import TASK_POOL, TaskDefinition, TaskMatcher, TaskOperation
 
 
 class FakeExecutionContext:
@@ -79,10 +79,11 @@ class ClickAndReturnExecutorTest(unittest.TestCase):
     def test_returns_immediately_when_stay_is_zero(self) -> None:
         context = FakeExecutionContext()
         delays: list[float] = []
-        ClickAndReturnExecutor(sleep=delays.append).execute(
+        ClickAndReturnExecutor().execute(
             context,
             task(TaskOperation.CLICK_AND_RETURN),
             (100, 200),
+            sleep=delays.append,
         )
         self.assertEqual(context.events, [("tap", (100, 200)), "depart"])
         self.assertEqual(delays, [])
@@ -90,10 +91,11 @@ class ClickAndReturnExecutorTest(unittest.TestCase):
     def test_waits_and_stays_when_duration_is_configured(self) -> None:
         context = FakeExecutionContext()
         delays: list[float] = []
-        ClickAndReturnExecutor(sleep=delays.append).execute(
+        ClickAndReturnExecutor().execute(
             context,
             task(TaskOperation.CLICK_AND_RETURN, stay_seconds=300),
             (100, 200),
+            sleep=delays.append,
         )
         self.assertEqual(
             context.events,

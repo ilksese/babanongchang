@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from babanongchang import runtime as time
+from time import sleep as system_sleep
 from collections.abc import Callable
 from typing import Protocol, Sequence
 
-from babanongchang.browsing import find_browse_iteration
-from babanongchang.task_pool import TaskDefinition, TaskOperation
+from babanongchang.automation.browsing import find_browse_iteration
+from babanongchang.farm.alipay.task_pool import TaskDefinition, TaskOperation
 
 
 class TaskExecutionContext(Protocol):
@@ -26,6 +26,8 @@ class TaskExecutor(Protocol):
         context: TaskExecutionContext,
         task: TaskDefinition,
         button: tuple[int, int],
+        *, sleep: Callable[[float], None] = system_sleep,
+        log: Callable[[str], None] = print,
     ) -> None: ...
 
 
@@ -35,6 +37,8 @@ class SwipeBrowseExecutor:
         context: TaskExecutionContext,
         task: TaskDefinition,
         button: tuple[int, int],
+        *, sleep: Callable[[float], None] = system_sleep,
+        log: Callable[[str], None] = print,
     ) -> None:
         context.tap_task_button(button)
         context.wait_for_task_page()
@@ -42,27 +46,26 @@ class SwipeBrowseExecutor:
         duration_seconds = task.duration_seconds
         if iteration is not None:
             duration_seconds *= iteration
-            print(f"识别到“第 {iteration} 次”，本轮浏览 {duration_seconds:g} 秒")
+            log(f"识别到“第 {iteration} 次”，本轮浏览 {duration_seconds:g} 秒")
         context.run_swipe_browse(duration_seconds)
 
 
 class ClickAndReturnExecutor:
-    def __init__(self, sleep: Callable[[float], None] = time.sleep) -> None:
-        self.sleep = sleep
-
     def execute(
         self,
         context: TaskExecutionContext,
         task: TaskDefinition,
         button: tuple[int, int],
+        *, sleep: Callable[[float], None] = system_sleep,
+        log: Callable[[str], None] = print,
     ) -> None:
         context.tap_task_button(button)
         context.wait_for_task_list_departure()
         if task.stay_seconds == 0:
             return
         context.wait_for_task_page()
-        print(f"任务页面停留 {task.stay_seconds:g} 秒后返回")
-        self.sleep(task.stay_seconds)
+        log(f"任务页面停留 {task.stay_seconds:g} 秒后返回")
+        sleep(task.stay_seconds)
 
 
 TASK_EXECUTORS: dict[TaskOperation, TaskExecutor] = {

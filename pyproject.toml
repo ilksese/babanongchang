@@ -8,6 +8,7 @@ dependencies = [
     "onnxruntime>=1.20,<2",
     "opencv-python-headless>=4.10,<5",
     "rapidocr==3.10.0",
+    "tomlkit>=0.15.2,<0.16",
 ]
 
 [project.scripts]
@@ -19,3 +20,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/babanongchang"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/babanongchang/icon.png" = "babanongchang/icon.png"

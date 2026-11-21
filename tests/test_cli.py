@@ -1,29 +1,20 @@
+from subprocess import CompletedProcess
 import unittest
-from unittest.mock import Mock, call, patch
+from unittest.mock import ANY, Mock, call, patch
 
 import numpy as np
 
-from babanongchang.cli import (
-    ALIPAY_HOME_ACTIVITY,
-    ALIPAY_PACKAGE,
-    Adb,
-    AlipayAutomation,
-    AutomationError,
-    OcrText,
-    ScreenSnapshot,
-    TaskAutomation,
-    WaitTimeoutError,
-    build_parser,
-    describe_recognized_tasks,
-    find_fertilizer_entry,
-    find_goods_entry,
-    find_task_action,
-    has_task_dialog,
-    main,
-    parse_fertilizer,
-    run_workflow,
+from babanongchang.adapters.adb import Adb
+from babanongchang.automation.handle import AutomationError, OcrText, ScreenSnapshot, TextHandle, WaitTimeoutError
+from babanongchang.cli import build_parser, main
+from babanongchang.config import ProjectConfig
+from babanongchang.farm.alipay.flow import (
+    ALIPAY_HOME_ACTIVITY, ALIPAY_PACKAGE, AlipayAutomation, TaskAutomation,
+    describe_recognized_tasks, find_fertilizer_entry, find_goods_entry, find_task_action,
+    has_task_dialog, parse_fertilizer,
 )
-from babanongchang.task_pool import TASK_POOL
+from babanongchang.workflow import FarmOptions, run_farm
+from babanongchang.farm.alipay.task_pool import TASK_POOL
 
 
 GOODS_TASK = TASK_POOL[0]
@@ -192,56 +183,56 @@ class ReturnToFarmTest(unittest.TestCase):
         home = (item("肥料600", 360, 1150), item("施肥", 360, 1200))
         dialog = ScreenSnapshot(image, (*home, item("做任务领肥料", 360, 527)))
         farm = ScreenSnapshot(image, home)
-        automation = TaskAutomation.__new__(TaskAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(side_effect=[dialog, farm, farm, farm])
+        device = Mock()
+        automation = TaskAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(side_effect=[dialog, farm, farm, farm])
 
         with patch("time.sleep"):
             automation.return_to_farm()
 
         automation.adb.back.assert_not_called()
         automation.adb.tap.assert_called_once()
-        self.assertEqual(automation.scan.call_count, 4)
+        self.assertEqual(automation.screen.scan.call_count, 4)
 
     def test_does_not_go_back_when_already_on_farm(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
         farm = ScreenSnapshot(
             image, (item("肥料0", 360, 1150), item("施肥", 360, 1200))
         )
-        automation = TaskAutomation.__new__(TaskAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=farm)
+        device = Mock()
+        automation = TaskAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=farm)
 
         with patch("time.sleep"):
             automation.return_to_farm()
 
         automation.adb.back.assert_not_called()
-        self.assertEqual(automation.scan.call_count, 3)
+        self.assertEqual(automation.screen.scan.call_count, 3)
 
     def test_stops_when_mask_click_does_not_close_dialog(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
         dialog = ScreenSnapshot(image, (item("做任务集肥料", 360, 527),))
-        automation = TaskAutomation.__new__(TaskAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=dialog)
-        automation.wait_for_screen = Mock(side_effect=WaitTimeoutError("弹窗未关闭"))
-        automation.wait_for_stable_screen = Mock()
+        device = Mock()
+        automation = TaskAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=dialog)
+        automation.screen.wait_for_screen = Mock(side_effect=WaitTimeoutError("弹窗未关闭"))
+        automation.screen.wait_for_stable_screen = Mock()
 
         with self.assertRaisesRegex(WaitTimeoutError, "弹窗未关闭"):
             automation.return_to_farm(timeout=3)
 
         automation.adb.tap.assert_called_once_with((360, 309))
         automation.adb.back.assert_not_called()
-        self.assertEqual(automation.wait_for_screen.call_args.kwargs["timeout"], 3000)
-        automation.wait_for_stable_screen.assert_not_called()
+        self.assertEqual(automation.screen.wait_for_screen.call_args.kwargs["timeout"], 3000)
+        automation.screen.wait_for_stable_screen.assert_not_called()
 
     def test_does_not_click_unknown_page_or_unsafe_mask(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
         for texts in ((), (item("做任务集肥料", 360, 200),)):
             with self.subTest(texts=texts):
-                automation = TaskAutomation.__new__(TaskAutomation)
-                automation.adb = Mock()
-                automation.scan = Mock(return_value=ScreenSnapshot(image, texts))
+                device = Mock()
+                automation = TaskAutomation(device, TextHandle(device, ocr=Mock()))
+                automation.screen.scan = Mock(return_value=ScreenSnapshot(image, texts))
                 with self.assertRaises(AutomationError):
                     automation.return_to_farm()
                 automation.adb.tap.assert_not_called()
@@ -309,36 +300,52 @@ class DeviceSelectionTest(unittest.TestCase):
             adb._select_device()
 
 
+class AdbCleanupTest(unittest.TestCase):
+    def test_restores_screen_sleep_if_cancelled_during_setup(self) -> None:
+        clock = Mock()
+
+        def command(arguments, **kwargs):
+            if arguments[-1] == "true":
+                clock.checkpoint.side_effect = KeyboardInterrupt
+            return CompletedProcess(arguments, 0, stdout=b"device\n", stderr=b"")
+
+        with patch("babanongchang.adapters.adb.subprocess.run", side_effect=command) as run:
+            with self.assertRaises(KeyboardInterrupt):
+                Adb("device", clock=clock)
+
+        self.assertEqual(run.call_args.args[0], ["adb", "-s", "device", "shell", "svc", "power", "stayon", "false"])
+
+
 class AlipayAutomationTest(unittest.TestCase):
     def test_runs_alipay_stages_in_order(self) -> None:
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
         automation.threshold = 900
         automation.browse_seconds = 21
         automation.ensure_farm_page = Mock()
-        automation.return_to_farm = Mock()
+        automation.tasks.return_to_farm = Mock()
         with (
             patch.object(TaskAutomation, "run") as tasks,
-            patch("babanongchang.cli.GoodsAutomation") as goods,
-            patch("babanongchang.cli.FarmAutomation") as farm,
+            patch("babanongchang.farm.alipay.flow.GoodsAutomation") as goods,
+            patch("babanongchang.farm.alipay.flow.FarmAutomation") as farm,
         ):
             calls = Mock()
             calls.attach_mock(automation.ensure_farm_page, "enter")
             calls.attach_mock(tasks, "tasks")
-            calls.attach_mock(automation.return_to_farm, "return_home")
+            calls.attach_mock(automation.tasks.return_to_farm, "return_home")
             calls.attach_mock(goods, "goods")
             calls.attach_mock(farm, "farm")
             automation.run(max_clicks=2)
             self.assertEqual(calls.mock_calls, [
                 call.enter(), call.tasks(), call.return_home(),
-                call.goods(automation.adb, browse_seconds=21), call.goods().run(),
-                call.farm(automation.adb, threshold=900, browse_seconds=21),
+                call.goods(automation.adb, automation.screen, 21, log=ANY), call.goods().run(),
+                call.farm(automation.adb, automation.screen, threshold=900, browse_seconds=21, log=ANY),
                 call.farm().run(max_clicks=2),
             ])
 
     def test_initializes_threshold_and_browse_duration(self) -> None:
-        with patch("babanongchang.handle.RapidOCR"):
-            automation = AlipayAutomation(Mock(), threshold=900, browse_seconds=21)
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()), threshold=900, browse_seconds=21)
         self.assertEqual(automation.threshold, 900)
         self.assertEqual(automation.browse_seconds, 21)
 
@@ -351,15 +358,15 @@ class AlipayAutomationTest(unittest.TestCase):
         farm = ScreenSnapshot(image, (
             item("肥料600", 360, 1150), item("施肥", 360, 1200),
         ))
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(side_effect=[home, home, home, farm, farm, farm])
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(side_effect=[home, home, home, farm, farm, farm])
         with patch("time.sleep"):
             automation.ensure_farm_page()
         automation.adb.start_activity.assert_called_once_with(ALIPAY_HOME_ACTIVITY)
         automation.adb.tap.assert_called_once_with(entry.center)
         automation.adb.back.assert_not_called()
-        self.assertEqual(automation.scan.call_count, 6)
+        self.assertEqual(automation.screen.scan.call_count, 6)
 
     def test_enters_farm_when_home_label_is_not_recognized(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
@@ -371,9 +378,9 @@ class AlipayAutomationTest(unittest.TestCase):
         farm = ScreenSnapshot(image, (
             item("肥料600", 360, 1150), item("施肥", 360, 1200),
         ))
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(side_effect=[home, home, home, farm, farm, farm])
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(side_effect=[home, home, home, farm, farm, farm])
         self.assertTrue(automation.is_home(home))
         with patch("time.sleep"):
             automation.ensure_farm_page()
@@ -385,9 +392,9 @@ class AlipayAutomationTest(unittest.TestCase):
         farm = ScreenSnapshot(image, (
             item("肥料600", 360, 1150), item("施肥", 360, 1200),
         ))
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=farm)
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=farm)
         with patch("time.sleep"):
             automation.ensure_farm_page()
         automation.adb.tap.assert_not_called()
@@ -395,9 +402,9 @@ class AlipayAutomationTest(unittest.TestCase):
 
     def test_does_not_click_farm_text_outside_alipay_home(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=ScreenSnapshot(
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=ScreenSnapshot(
             image, (item("芭芭农场", 200, 500),)
         ))
         with patch("time.monotonic", side_effect=[0, 0, 11, 61]), patch("time.sleep"):
@@ -408,9 +415,9 @@ class AlipayAutomationTest(unittest.TestCase):
 
     def test_unrecognized_page_does_not_back_out_to_launcher(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=ScreenSnapshot(image, ()))
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=ScreenSnapshot(image, ()))
         with (
             patch("time.monotonic", side_effect=[0, 0, 0, 11, 11, 61]),
             patch("time.sleep"),
@@ -421,12 +428,12 @@ class AlipayAutomationTest(unittest.TestCase):
 
     def test_stops_if_home_entry_is_missing(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=ScreenSnapshot(image, (
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=ScreenSnapshot(image, (
             item("首页", 70, 1500), item("扫一扫", 100, 200),
         )))
-        automation.wait_for_stable_text = Mock(side_effect=WaitTimeoutError("未找到入口"))
+        automation.screen.wait_for_stable_text = Mock(side_effect=WaitTimeoutError("未找到入口"))
         with self.assertRaisesRegex(WaitTimeoutError, "未找到入口"):
             automation.ensure_farm_page()
         automation.adb.tap.assert_not_called()
@@ -437,11 +444,11 @@ class AlipayAutomationTest(unittest.TestCase):
         home = ScreenSnapshot(image, (
             item("首页", 70, 1500), item("扫一扫", 100, 200), entry,
         ))
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=home)
-        automation.wait_for_stable_text = Mock(return_value=entry)
-        automation.wait_for_screen = Mock(side_effect=WaitTimeoutError("未进入农场"))
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=home)
+        automation.screen.wait_for_stable_text = Mock(return_value=entry)
+        automation.screen.wait_for_screen = Mock(side_effect=WaitTimeoutError("未进入农场"))
         with self.assertRaisesRegex(WaitTimeoutError, "未进入农场"):
             automation.ensure_farm_page()
         automation.adb.tap.assert_called_once_with(entry.center)
@@ -449,14 +456,14 @@ class AlipayAutomationTest(unittest.TestCase):
 
     def test_accepts_open_task_dialog(self) -> None:
         image = np.zeros((1600, 720, 3), dtype=np.uint8)
-        automation = AlipayAutomation.__new__(AlipayAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=ScreenSnapshot(
+        device = Mock()
+        automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=ScreenSnapshot(
             image, (item("做任务领肥料", 360, 527),)
         ))
-        automation.wait_for_task_list_stable = Mock()
+        automation.tasks.wait_for_task_list_stable = Mock()
         automation.ensure_farm_page()
-        automation.wait_for_task_list_stable.assert_called_once_with()
+        automation.tasks.wait_for_task_list_stable.assert_called_once_with()
         automation.adb.tap.assert_not_called()
 
     def test_does_not_continue_after_a_stage_fails(self) -> None:
@@ -464,19 +471,19 @@ class AlipayAutomationTest(unittest.TestCase):
             with (
                 self.subTest(stage=stage),
                 patch.object(TaskAutomation, "run") as tasks,
-                patch("babanongchang.cli.GoodsAutomation") as goods,
-                patch("babanongchang.cli.FarmAutomation") as farm,
+                patch("babanongchang.farm.alipay.flow.GoodsAutomation") as goods,
+                patch("babanongchang.farm.alipay.flow.FarmAutomation") as farm,
             ):
-                automation = AlipayAutomation.__new__(AlipayAutomation)
-                automation.adb = Mock()
+                device = Mock()
+                automation = AlipayAutomation(device, TextHandle(device, ocr=Mock()))
                 automation.browse_seconds = 18
                 automation.threshold = 600
                 automation.ensure_farm_page = Mock()
-                automation.return_to_farm = Mock()
+                automation.tasks.return_to_farm = Mock()
                 action = {
                     "enter": automation.ensure_farm_page,
                     "tasks": tasks,
-                    "return": automation.return_to_farm,
+                    "return": automation.tasks.return_to_farm,
                     "goods": goods.return_value.run,
                 }[stage]
                 action.side_effect = AutomationError("阶段失败")
@@ -499,8 +506,8 @@ class WorkflowTest(unittest.TestCase):
         ):
             with (
                 self.subTest(packages=packages),
-                patch("babanongchang.cli.AlipayAutomation") as alipay,
-                patch("babanongchang.taobao.TaobaoAutomation") as taobao,
+                patch("babanongchang.workflow.AlipayAutomation") as alipay,
+                patch("babanongchang.workflow.TaobaoAutomation") as taobao,
                 patch("builtins.print") as output,
             ):
                 taobao.PACKAGE = taobao_package
@@ -509,15 +516,15 @@ class WorkflowTest(unittest.TestCase):
                 order = []
                 alipay.return_value.run.side_effect = lambda **kwargs: order.append("alipay")
                 taobao.return_value.run.side_effect = lambda: order.append("taobao")
-                run_workflow(adb, threshold=900, browse_seconds=21, max_clicks=2)
+                run_farm("all", FarmOptions(900, 21, 2), device=adb, ocr=Mock(), config=ProjectConfig(), log=output)
                 self.assertEqual(order, expected)
                 if "alipay" in expected:
-                    alipay.assert_called_once_with(adb, threshold=900, browse_seconds=21)
+                    alipay.assert_called_once_with(adb, ANY, 900, 21, log=output)
                     alipay.return_value.run.assert_called_once_with(max_clicks=2)
                 else:
                     alipay.assert_not_called()
                 if "taobao" in expected:
-                    taobao.assert_called_once_with(adb)
+                    taobao.assert_called_once_with(adb, ANY, log=output)
                     taobao.return_value.run.assert_called_once_with()
                 else:
                     taobao.assert_not_called()
@@ -526,8 +533,8 @@ class WorkflowTest(unittest.TestCase):
 
     def test_checks_for_alipay_after_taobao_without_repeating_apps(self) -> None:
         with (
-            patch("babanongchang.cli.AlipayAutomation") as alipay,
-            patch("babanongchang.taobao.TaobaoAutomation") as taobao,
+            patch("babanongchang.workflow.AlipayAutomation") as alipay,
+            patch("babanongchang.workflow.TaobaoAutomation") as taobao,
         ):
             taobao.PACKAGE = "com.taobao.taobao"
             adb = Mock()
@@ -538,24 +545,24 @@ class WorkflowTest(unittest.TestCase):
             calls = Mock()
             calls.attach_mock(taobao, "taobao")
             calls.attach_mock(alipay, "alipay")
-            run_workflow(adb)
+            run_farm("all", FarmOptions(), device=adb, ocr=Mock(), config=ProjectConfig())
             self.assertEqual(calls.mock_calls, [
-                call.taobao(adb), call.taobao().run(),
-                call.alipay(adb, threshold=600, browse_seconds=18),
+                call.taobao(adb, ANY, log=ANY), call.taobao().run(),
+                call.alipay(adb, ANY, 600, 18, log=ANY),
                 call.alipay().run(max_clicks=None),
             ])
 
     def test_stops_without_switching_apps_after_failure(self) -> None:
         with (
-            patch("babanongchang.cli.AlipayAutomation") as alipay,
-            patch("babanongchang.taobao.TaobaoAutomation") as taobao,
+            patch("babanongchang.workflow.AlipayAutomation") as alipay,
+            patch("babanongchang.workflow.TaobaoAutomation") as taobao,
         ):
             taobao.PACKAGE = "com.taobao.taobao"
             adb = Mock()
             adb.installed_packages.return_value = {ALIPAY_PACKAGE, taobao.PACKAGE}
             alipay.return_value.run.side_effect = AutomationError("支付宝失败")
             with self.assertRaisesRegex(AutomationError, "支付宝失败"):
-                run_workflow(adb)
+                run_farm("all", FarmOptions(), device=adb, ocr=Mock(), config=ProjectConfig())
             taobao.assert_not_called()
 
 
@@ -580,13 +587,14 @@ class CliDispatchTest(unittest.TestCase):
                 ],
             ),
             patch("babanongchang.cli.Adb") as adb,
-            patch("babanongchang.cli.run_workflow") as workflow,
+            patch("babanongchang.cli.run_farm") as workflow,
         ):
             main()
 
-            adb.assert_called_once_with("device")
+            adb.assert_called_once_with("device", clock=ANY)
             workflow.assert_called_once_with(
-                adb.return_value, threshold=900, browse_seconds=21, max_clicks=2
+                "all", FarmOptions(900, 21, 2), device=adb.return_value, ocr=ANY,
+                config=ANY, clock=adb.call_args.kwargs["clock"],
             )
             adb.return_value.allow_screen_sleep.assert_called_once_with()
 
@@ -594,7 +602,7 @@ class CliDispatchTest(unittest.TestCase):
         with (
             patch("sys.argv", ["babanongchang"]),
             patch("babanongchang.cli.Adb") as adb,
-            patch("babanongchang.cli.run_workflow", side_effect=AutomationError("阶段失败")),
+            patch("babanongchang.cli.run_farm", side_effect=AutomationError("阶段失败")),
         ):
             with self.assertRaisesRegex(SystemExit, "自动化已安全停止：阶段失败"):
                 main()
@@ -603,21 +611,20 @@ class CliDispatchTest(unittest.TestCase):
 
     def test_explicit_modules_do_not_run_workflow(self) -> None:
         for module, target in (
-            ("fertilize", "babanongchang.cli.FarmAutomation"),
-            ("goods", "babanongchang.cli.GoodsAutomation"),
-            ("tasks", "babanongchang.cli.TaskAutomation"),
-            ("taobao", "babanongchang.taobao.TaobaoAutomation"),
+            ("fertilize", "FarmAutomation"),
+            ("goods", "GoodsAutomation"),
+            ("tasks", "TaskAutomation"),
+            ("taobao", "TaobaoAutomation"),
         ):
             with (
                 self.subTest(module=module),
                 patch("sys.argv", ["babanongchang", module]),
                 patch("babanongchang.cli.Adb") as adb,
-                patch("babanongchang.cli.run_workflow") as workflow,
-                patch(target) as automation,
+                patch(f"babanongchang.workflow.{target}") as automation,
             ):
                 main()
 
-                workflow.assert_not_called()
+                adb.return_value.installed_packages.assert_not_called()
                 automation.assert_called_once()
                 if module == "fertilize":
                     automation.return_value.run.assert_called_once_with(max_clicks=None)

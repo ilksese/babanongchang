@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 import numpy as np
 
-from babanongchang.android import AndroidOcr, AndroidScreenReader
+from babanongchang.adapters.android import AndroidOcr, AndroidScreenReader
 
 
 class AndroidOcrTest(unittest.TestCase):

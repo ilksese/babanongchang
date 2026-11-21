@@ -5,9 +5,8 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
-import cv2
 import numpy as np
 
 from babanongchang.cli import main
@@ -25,21 +24,20 @@ def arrow_board():
 
 
 class NlgjIntegrationTest(unittest.TestCase):
-    def test_offline_command_recognizes_board_and_writes_report_without_adb(self):
+    def test_dry_run_recognizes_device_board_and_writes_report_without_tapping(self):
         with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / "board.png"
-            output = Path(directory) / "output"
-            cv2.imwrite(str(image), arrow_board())
+            output = Path(directory)
+            image = arrow_board()
             with (
-                patch("sys.argv", ["babanongchang", "games", "--nlgj",
-                                   "--screenshot", str(image), "--output", str(output)]),
-                patch("babanongchang.cli.Adb") as adb,
-                patch("babanongchang.nlgj.runner.Device") as device,
+                patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
+                patch.object(ScreenReader, "read", return_value=[]),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                main()
-            adb.assert_not_called()
-            device.assert_not_called()
+                device.return_value.package = "game"
+                device.return_value.screenshot.side_effect = [image, image]
+                main(["games", "--nlgj", "--dry-run", "--output", directory])
+            self.assertEqual(device.return_value.screenshot.call_count, 2)
+            device.return_value.tap.assert_not_called()
             report = json.loads((output / "report.json").read_text())
             self.assertTrue(report["valid"], report["reason"])
             self.assertEqual(report["arrows"], 2)
@@ -51,17 +49,22 @@ class NlgjIntegrationTest(unittest.TestCase):
             patch("sys.argv", ["babanongchang", "games", "--nlgj", "--serial", "device",
                                "--mode", "fast", "--target", "100", "--no-revive-ads"]),
             patch("babanongchang.cli.Adb") as adb,
+            patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
             patch("babanongchang.nlgj.runner.play") as play,
         ):
             main()
         adb.assert_not_called()
         args = play.call_args.args[0]
-        self.assertEqual((args.serial, args.mode, args.target), ("device", "fast", 100))
+        device.assert_called_once_with("device", "adb", clock=ANY)
+        self.assertIs(play.call_args.kwargs["device"], device.return_value)
+        self.assertEqual((args.mode, args.target), ("fast", 100))
         self.assertFalse(args.revive_ads)
 
     def test_invalid_selection_and_options_never_access_device(self):
         for options in (
-            ["games"], ["--nlgj"], ["games", "--nlgj", "--majiang"],
+            ["games"], ["--nlgj"], ["goods", "--nlgj"],
+            ["games", "--nlgj", "--screenshot", "board.png"],
+            ["games", "--nlgj", "--ocr"],
             ["games", "--nlgj", "--board-top", "0.9"],
             ["games", "--nlgj", "--target", "0"],
             ["games", "--nlgj", "--levels", "-1"],
@@ -71,7 +74,7 @@ class NlgjIntegrationTest(unittest.TestCase):
                 self.subTest(options=options),
                 patch("sys.argv", ["babanongchang", *options]),
                 patch("babanongchang.cli.Adb") as adb,
-                patch("babanongchang.nlgj.runner.Device") as device,
+                patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
                 contextlib.redirect_stderr(io.StringIO()),
                 self.assertRaises(SystemExit),
             ):
@@ -79,20 +82,10 @@ class NlgjIntegrationTest(unittest.TestCase):
             adb.assert_not_called()
             device.assert_not_called()
 
-    def test_majiang_dispatch_still_restores_screen_sleep(self):
-        with (
-            patch("sys.argv", ["babanongchang", "games", "--majiang"]),
-            patch("babanongchang.cli.Adb") as adb,
-            patch("babanongchang.majiang.MajiangAutomation") as game,
-        ):
-            main()
-        game.assert_called_once_with(adb.return_value)
-        game.return_value.run.assert_called_once_with()
-        adb.return_value.allow_screen_sleep.assert_called_once_with()
-
     def test_runtime_failure_becomes_safe_exit(self):
         with (
             patch("sys.argv", ["babanongchang", "games", "--nlgj"]),
+            patch("babanongchang.adapters.adb_game.AdbGameDevice"),
             patch("babanongchang.nlgj.runner.play", side_effect=RuntimeError("foreground changed")),
             contextlib.redirect_stderr(io.StringIO()),
             self.assertRaises(SystemExit) as error,

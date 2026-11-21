@@ -1,6 +1,6 @@
 import unittest
 
-from babanongchang.task_pool import TASK_POOL, TaskMatcher, TaskOperation
+from babanongchang.farm.alipay.task_pool import TASK_POOL, TaskMatcher, TaskOperation
 
 
 class TaskMatcherTest(unittest.TestCase):

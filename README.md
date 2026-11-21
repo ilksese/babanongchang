@@ -47,8 +47,6 @@ uv run babanongchang games --nlgj
 uv run babanongchang games --nlgj --dry-run
 # 快速模式：按分析出的顺序每 300ms 点击一条箭头
 uv run babanongchang games --nlgj --mode fast --serial <ADB_SERIAL>
-# 完全离线识别截图，不连接设备
-uv run babanongchang games --nlgj --screenshot image.png --ocr
 ```
 
 实现迁自 `nuolegejian`，已包含在本项目中。默认使用 `safe` 模式，每次确认箭头离场及剩余棋盘后再继续，最多通关 3 次或运行 15 分钟。`--levels 0 --max-minutes 30` 可只按时间运行；`--target 100` 表示完成第 100 关或更高关卡后停止，覆盖通关次数和总时间限制。全部参数见 `uv run babanongchang games --nlgj --help`。
@@ -56,25 +54,6 @@ uv run babanongchang games --nlgj --screenshot image.png --ocr
 失败时默认优先观看复活广告，确认固定 30 秒广告页后上下滑动 33 秒，再识别“奖励已发放”并关闭广告。默认不消耗体力重开；恢复连胜仅使用已确认足够的现有金币，余额不足则放弃，`--streak-policy stop` 可禁止此操作。遇到爱心减少、前台应用切换、未知弹窗或无法确认的棋盘时停止；按 `Ctrl+C` 可手动停止。
 
 适配白底深色直角折线箭头棋盘，特殊机关、严重重叠或裁切可能被拒绝操作。诊断截图、标注和日志默认写入已忽略的 `artifacts/nlgj/`，可通过 `--output` 修改。
-
-### 麻将游戏
-
-先手动进入当前麻将关卡，再运行：
-
-```bash
-uv run babanongchang games --majiang
-```
-
-- 底部同时识别到“消除、洗牌、翻牌、磁铁”后开始，读取磁铁数量和剩余牌数。
-- 磁铁为 0 时打开磁铁弹窗，只点“免费”看广告，不花金币购买。
-- 广告页上下滑动 30 秒，再每隔 1 秒识别“已获得奖励”；未领奖且仍显示倒计时时继续往复滑动，避免倒计时停滞。最多额外等待 120 秒，超时保留页面并停止。
-- 领奖后只点广告右上角“关闭”，绝不使用系统返回键；点击奖励弹窗“确定”，确认磁铁到账后使用。
-- 每次点击后等待牌数减少且页面稳定，通关后自动点击“下一关”，确认新关卡稳定后继续。按 `Ctrl+C` 手动停止；数量无法识别、遇到未知弹窗或步骤超时时自动停止，不重试超时步骤。
-- 仅以“关卡完成”等通关弹窗文案判定通关；剩余牌数为 0 时仍等待通关弹窗，超时则停止，不继续领取磁铁或点击下一关。
-- 进入下一关后额外比较牌面图像，连续多帧静止才开始点击磁铁，避免洗牌动画屏蔽点击。洗牌等待最多 40 秒，超时停止；不因按钮提前显示就开始操作。
-- 长时间闲置自动出现的道具推荐弹窗只关闭、不使用；定位弹窗自身的白色关闭圆环，点击一次并确认弹窗消失后继续。
-- 出现“时间到了”时，仅点击左侧免费广告“加时”；看完广告点击右上角“关闭”，确认回到游戏再继续。不花金币加时，免费按钮不可用时停止。
-- 可从本流程的奖励广告页面恢复启动；此时仍完整滑动 30 秒再检查奖励。
 
 ### 施肥
 
@@ -97,7 +76,7 @@ uv run babanongchang games --majiang
 - 对有“去完成”按钮的任务浏览 18 秒，返回后领取奖励并等待任务刷新。
 - 重复执行当天可用次数，直到任务池中的浏览任务均无可执行按钮。
 
-任务规则统一注册在 `src/babanongchang/task_pool.py`：
+支付宝任务规则统一注册在 [`farm/alipay/task_pool.py`](src/babanongchang/farm/alipay/task_pool.py)：
 
 - `TaskMatcher(fixed_text=...)` 匹配固定文案。
 - `TaskMatcher(pattern=...)` 使用正则表达式匹配动态文案。
@@ -105,7 +84,7 @@ uv run babanongchang games --majiang
 - 当前支持 `SWIPE_BROWSE`（上下滑动浏览）操作，默认时长为 18 秒，每个任务可单独覆盖。
 - 浏览页面出现阿拉伯数字形式的“第 n 次”时，本轮时长按任务配置时长乘以 `n` 计算；例如默认配置下“第3次”浏览 54 秒。
 
-通用上下滑动功能位于 `src/babanongchang/browsing.py`。任务执行策略位于 `src/babanongchang/task_executors.py`，目前提供：
+通用上下滑动功能位于 [`automation/browsing.py`](src/babanongchang/automation/browsing.py)。支付宝任务执行策略位于 [`farm/alipay/task_executors.py`](src/babanongchang/farm/alipay/task_executors.py)，目前提供：
 
 - `SwipeBrowseExecutor`：进入页面后按配置时长滑动浏览。
 - `ClickAndReturnExecutor`：进入页面并等待跳转完成，随后由公共流程立即返回任务列表。
@@ -124,9 +103,9 @@ uv run babanongchang games --majiang
 
 ## Android APK
 
-APK 已接入全部 CLI 业务入口：支付宝连续施肥、逛农货、任务池、淘宝完整流程、麻将及挪了个箭。手机端直接复用 Python 自动化逻辑，通过无障碍服务完成本机操作，无需连接电脑或 ADB。
+APK 已接入全部 CLI 业务入口：支付宝连续施肥、逛农货、任务池、淘宝完整流程及挪了个箭。手机端直接复用 Python 自动化逻辑，通过无障碍服务完成本机操作，无需连接电脑或 ADB。
 
-应用中选择功能并填写 CLI 附加参数；支持日志、挪了个箭离线截图识别和诊断导出。构建、使用及真机验收限制见 [Android 说明](android/README.md)。
+应用中选择功能并在对应设置页调整参数；支持运行记录和诊断导出。构建、使用及真机验收限制见 [Android 说明](android/README.md)。
 
 ## 环境
 
@@ -184,7 +163,7 @@ uv run babanongchang fertilize --max-clicks 1
 
 脚本启动时会主动唤醒设备，并在运行期间通过 ADB 强制保持亮屏；退出时会恢复系统自动休眠。运行前仍需手动解锁手机。总工作流会自动进入农场；单独执行 `fertilize`、`goods` 或 `tasks` 时，仍需先打开对应的支付宝芭芭农场页面。
 
-公共 OCR 文案操作位于 `src/babanongchang/handle.py` 的 `TextHandle`，`FarmAutomation` 通过继承复用：
+公共 OCR 文案操作位于 [`automation/handle.py`](src/babanongchang/automation/handle.py) 的 `TextHandle`，支付宝和淘宝流程各自组合使用：
 
 - `scan()`：截取当前屏幕并执行 OCR，返回包含图片和文字项的 `ScreenSnapshot`。
 - `find_text()` / `find_texts()` / `has_text()`：查找单项、全部匹配项或判断文案是否存在，支持精确匹配和相对屏幕区域过滤。
@@ -196,9 +175,9 @@ uv run babanongchang fertilize --max-clicks 1
 - `click_text(text="", wait=True, timeout=10000)`：等待并点击文案，返回点击坐标；`wait=False` 时只识别当前屏幕一次。
 - `tap_and_wait()` / `click_text_and_wait()`：只点击一次并等待目标页面，等待期间不会重复点击。
 
-通用返回操作位于 `src/babanongchang/navigation.py`：`back_until()` 每次返回后重新识别页面，直到目标页面出现或超时。
+通用返回操作位于 [`automation/navigation.py`](src/babanongchang/automation/navigation.py)：`back_until()` 每次返回后重新识别页面，直到目标页面出现或超时。
 
-项目级配置位于根目录 `babanongchang.toml`，在进程启动时读取：
+每次运行农场任务前，CLI 从工作目录读取 `babanongchang.toml`；从仓库根目录启动时使用仓库内的配置：
 
 ```toml
 [ocr]
@@ -208,6 +187,8 @@ recognition_timeout_ms = 10000
 
 - `screenshot_interval_ms`：等待 OCR 文案时连续截图的间隔，默认 200 毫秒。
 - `recognition_timeout_ms`：OCR 文案等待的默认超时，默认 10 秒。
+
+CLI 和 Android 都调用共享的 [`workflow.run_farm`](src/babanongchang/workflow.py) 或 [`nlgj.runner.play`](src/babanongchang/nlgj/runner.py)。`farm/alipay/` 和 `farm/taobao/` 各自维护页面与任务规则，`automation/` 提供公共识别和等待，`adapters/` 封装设备和 OCR。运行入口负责加载配置并传入本次运行的时钟与日志；桌面界面继续使用 CLI 子进程。
 
 扫描任务列表时会逐屏输出命中的任务、操作类型和按钮状态，例如：
 

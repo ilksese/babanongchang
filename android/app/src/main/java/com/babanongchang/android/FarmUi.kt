@@ -157,13 +157,12 @@ object FarmUi {
 }
 
 object FarmFeatures {
-    val titles = listOf("一键照料", "连续施肥", "逛农货", "领取任务", "淘宝农场", "麻将", "挪了个箭")
-    val descriptions = listOf("依次照料支付宝与淘宝农场", "在支付宝农场使用肥料", "浏览农货，领取奖励", "完成支付宝农场任务", "完成淘宝任务与施肥", "进入游戏后辅助闯关", "进入游戏后辅助解题")
-    private val modules = listOf("all", "fertilize", "goods", "tasks", "taobao", "games", "games")
+    val titles = listOf("一键照料", "连续施肥", "逛农货", "领取任务", "淘宝农场", "挪了个箭")
+    val descriptions = listOf("依次照料支付宝与淘宝农场", "在支付宝农场使用肥料", "浏览农货，领取奖励", "完成支付宝农场任务", "完成淘宝任务与施肥", "进入游戏后辅助解题")
+    private val modules = listOf("all", "fertilize", "goods", "tasks", "taobao", "games")
     fun module(index: Int) = modules[index]
     fun options(index: Int, extra: String) = when (index) {
-        5 -> "--majiang $extra"
-        6 -> "--nlgj $extra"
+        5 -> "--nlgj $extra"
         else -> extra
     }
 }

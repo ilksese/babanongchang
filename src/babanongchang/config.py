@@ -54,6 +54,3 @@ def load_project_config(path: Path | None = None) -> ProjectConfig:
             defaults.recognition_timeout_ms,
         ),
     )
-
-
-PROJECT_CONFIG = load_project_config()

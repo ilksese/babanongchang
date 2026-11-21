@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from babanongchang import runtime as time
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 from typing import Sequence
 
-from babanongchang.browsing import swipe_browse
-from babanongchang.cli import Adb, FarmAutomation
-from babanongchang.handle import (
+from babanongchang.automation.browsing import swipe_browse
+from babanongchang.farm.device import FarmDevice
+from babanongchang.automation.handle import (
     AutomationError,
     OcrText,
     RelativeRegion,
@@ -15,7 +15,7 @@ from babanongchang.handle import (
     TextHandle,
     normalize_text,
 )
-from babanongchang.navigation import back_until
+from babanongchang.automation.navigation import back_until
 
 
 TAOBAO_SEARCH_TASKS = ("搜一搜你喜欢的商品", "搜一搜你心仪的宝贝")
@@ -159,22 +159,22 @@ def is_taobao_recommended_video_page(items: Sequence[OcrText]) -> bool:
     )
 
 
-class TaobaoAutomation(FarmAutomation):
+class TaobaoAutomation:
     """执行淘宝芭芭农场任务流程。"""
 
     PACKAGE = "com.taobao.taobao"
     HOME_ACTIVITY = "com.taobao.taobao/com.taobao.tao.welcome.Welcome"
 
-    def __init__(self, adb: Adb) -> None:
-        super().__init__(adb)
-        min_score = getattr(adb, "taobao_min_score", 0.75)
-        if not 0 <= min_score <= 1:
-            raise ValueError("淘宝 OCR 置信度阈值必须在 0 到 1 之间")
-        self.min_score = min_score
+    def __init__(
+        self, device: FarmDevice, screen: TextHandle, *, log: Callable[[str], None] = print,
+    ) -> None:
+        self.adb = device
+        self.screen = screen
+        self.log = log
 
     def wait_for_farm_page_ready(self, timeout: float = 30) -> OcrText:
         """等待农场页及“集肥料”入口连续三帧位置稳定。"""
-        return self.wait_for_stable_text(
+        return self.screen.wait_for_stable_text(
             "集肥料",
             stable_scans=3,
             position_tolerance=8,
@@ -187,44 +187,45 @@ class TaobaoAutomation(FarmAutomation):
 
     def wait_for_fertilizer_tasks_after_click(self, timeout: float = 15) -> bool:
         """单次点击后等待任务列表；进入其他页面时返回 False。"""
-        deadline = time.monotonic() + timeout
+        deadline = self.screen.clock.monotonic() + timeout
         left_farm_at: float | None = None
-        while time.monotonic() < deadline:
-            snapshot = self.scan()
+        while self.screen.clock.monotonic() < deadline:
+            snapshot = self.screen.scan()
             if is_taobao_fertilizer_tasks_page(snapshot.items):
                 return True
             if is_taobao_farm_page(snapshot.items):
                 left_farm_at = None
             elif left_farm_at is None:
-                left_farm_at = time.monotonic()
-            elif time.monotonic() - left_farm_at >= 2:
+                left_farm_at = self.screen.clock.monotonic()
+            elif self.screen.clock.monotonic() - left_farm_at >= 2:
                 return False
-            time.sleep(0.5)
+            self.screen.clock.sleep(0.5)
         return False
 
     def return_to_farm_page(self, timeout: float = 20) -> None:
         back_until(
             self.adb,
-            self,
+            self.screen,
             lambda snapshot: is_taobao_farm_page(snapshot.items),
             timeout=int(timeout * 1000),
+            clock=self.screen.clock,
             error="进入错误页面后未能返回淘宝芭芭农场",
         )
 
     def open_fertilizer_tasks_from_farm(self, max_attempts: int = 3) -> None:
         for attempt in range(1, max_attempts + 1):
             entry = self.wait_for_farm_page_ready()
-            print(f"第 {attempt} 次点击“集肥料”")
+            self.log(f"第 {attempt} 次点击“集肥料”")
             self.adb.tap(entry.center)
             if self.wait_for_fertilizer_tasks_after_click():
-                print("已稳定进入淘宝肥料任务列表")
+                self.log("已稳定进入淘宝肥料任务列表")
                 return
-            print("点击后未进入任务列表，返回农场首页重试")
+            self.log("点击后未进入任务列表，返回农场首页重试")
             self.return_to_farm_page()
         raise AutomationError("多次点击“集肥料”后仍未进入任务列表")
 
     def wait_after_farm_entry_click(self, timeout: float = 30) -> None:
-        destination = self.wait_for_screen(
+        destination = self.screen.wait_for_screen(
             lambda snapshot: (
                 "tasks"
                 if is_taobao_fertilizer_tasks_page(snapshot.items)
@@ -237,28 +238,28 @@ class TaobaoAutomation(FarmAutomation):
             error="点击淘宝首页“芭芭农场”后未进入农场页面",
         )
         if destination == "tasks":
-            print("已稳定进入淘宝肥料任务列表")
+            self.log("已稳定进入淘宝肥料任务列表")
             return
         self.open_fertilizer_tasks_from_farm()
 
     def ensure_fertilizer_tasks_page(self, timeout: float = 60) -> None:
         """从任意设备页面进入淘宝芭芭农场肥料任务列表。"""
-        if is_taobao_fertilizer_tasks_page(self.scan().items):
-            print("检测到已在淘宝肥料任务列表")
+        if is_taobao_fertilizer_tasks_page(self.screen.scan().items):
+            self.log("检测到已在淘宝肥料任务列表")
             return
 
         self.adb.start_activity(self.HOME_ACTIVITY)
-        print("已启动淘宝主页 Activity")
-        deadline = time.monotonic() + timeout
-        unknown_since = time.monotonic()
+        self.log("已启动淘宝主页 Activity")
+        deadline = self.screen.clock.monotonic() + timeout
+        unknown_since = self.screen.clock.monotonic()
 
-        while time.monotonic() < deadline:
-            snapshot = self.scan()
+        while self.screen.clock.monotonic() < deadline:
+            snapshot = self.screen.scan()
             if is_taobao_fertilizer_tasks_page(snapshot.items):
-                print("已稳定进入淘宝肥料任务列表")
+                self.log("已稳定进入淘宝肥料任务列表")
                 return
 
-            now = time.monotonic()
+            now = self.screen.clock.monotonic()
             on_farm_page = is_taobao_farm_page(snapshot.items)
             if on_farm_page:
                 self.open_fertilizer_tasks_from_farm()
@@ -268,23 +269,23 @@ class TaobaoAutomation(FarmAutomation):
                 entry = find_taobao_farm_entry(snapshot.items)
                 if entry is not None:
                     self.adb.tap(entry.center)
-                    print("已点击淘宝首页“芭芭农场”")
+                    self.log("已点击淘宝首页“芭芭农场”")
                     self.wait_after_farm_entry_click()
                     return
 
             if now - unknown_since >= 10:
                 self.adb.back()
-                print("当前页面无法识别，尝试返回以关闭遮挡页面")
+                self.log("当前页面无法识别，尝试返回以关闭遮挡页面")
                 unknown_since = now
-            time.sleep(0.5)
+            self.screen.clock.sleep(0.5)
 
         raise AutomationError("未能从当前页面稳定进入淘宝肥料任务列表")
 
     def open_search_task(
         self, task_name: str, button: OcrText, timeout: float = 20
     ) -> None:
-        print(f"开始执行“{task_name}”")
-        self.tap_and_wait(
+        self.log(f"开始执行“{task_name}”")
+        self.screen.tap_and_wait(
             button.center,
             lambda snapshot: (
                 snapshot if is_taobao_search_reward_page(snapshot.items) else None
@@ -293,19 +294,19 @@ class TaobaoAutomation(FarmAutomation):
             interval=500,
             error=f"点击“{task_name}”后未进入搜索奖励页面",
         )
-        print(f"已打开“{task_name}”任务")
+        self.log(f"已打开“{task_name}”任务")
 
     def browse_recommended_search_result(
         self, duration_seconds: float = 18, timeout: float = 20
     ) -> None:
-        keyword = self.wait_for_screen(
+        keyword = self.screen.wait_for_screen(
             lambda snapshot: find_taobao_recommended_keyword(snapshot.items),
             timeout=int(timeout * 1000),
             interval=500,
             error="搜索奖励页面未找到推荐关键词",
         )
-        print(f"点击推荐关键词：{keyword.text.strip()}")
-        self.tap_and_wait(
+        self.log(f"点击推荐关键词：{keyword.text.strip()}")
+        self.screen.tap_and_wait(
             keyword.center,
             lambda snapshot: (
                 snapshot if is_taobao_search_results_page(snapshot.items) else None
@@ -314,38 +315,39 @@ class TaobaoAutomation(FarmAutomation):
             interval=500,
             error="点击推荐关键词后未进入搜索结果列表",
         )
-        swipe_browse(self.adb, duration_seconds=duration_seconds)
+        swipe_browse(self.adb, duration_seconds, clock=self.screen.clock, log=self.log)
 
     def return_to_fertilizer_tasks(self, timeout: float = 30) -> None:
         result = back_until(
             self.adb,
-            self,
+            self.screen,
             lambda snapshot: is_taobao_fertilizer_tasks_page(snapshot.items),
             timeout=int(timeout * 1000),
+            clock=self.screen.clock,
             error="多次返回后仍未回到淘宝肥料任务列表",
         )
-        print(f"已返回淘宝肥料任务列表，共返回 {result.back_count} 次")
+        self.log(f"已返回淘宝肥料任务列表，共返回 {result.back_count} 次")
 
     def complete_supported_tasks(self) -> None:
         completed = 0
         while True:
-            snapshot = self.scan()
+            snapshot = self.screen.scan()
             found = find_available_taobao_task(snapshot.items, snapshot.shape)
             if found is None:
-                print(
+                self.log(
                     f"所有已接入任务均不可执行，今日任务已清空，共完成 {completed} 次"
                 )
                 return
 
             task, button = found
             if task.operation is TaobaoTaskOperation.SIGN_IN:
-                print("点击“去签到”")
-                self.tap_and_wait(
+                self.log("点击“去签到”")
+                self.screen.tap_and_wait(
                     button.center,
                     lambda current: (
                         current
                         if is_taobao_fertilizer_tasks_page(current.items)
-                        and not self.has_text(current.items, "去签到", exact=True)
+                        and not self.screen.has_text(current.items, "去签到", exact=True)
                         else None
                     ),
                     error="签到后未确认任务列表中的“去签到”按钮消失",
@@ -356,8 +358,8 @@ class TaobaoAutomation(FarmAutomation):
                 self.open_search_task(task.name, button)
                 self.browse_recommended_search_result()
             elif task.operation is TaobaoTaskOperation.SWIPE_BROWSE:
-                print(f"开始执行“{task.name}”")
-                self.tap_and_wait(
+                self.log(f"开始执行“{task.name}”")
+                self.screen.tap_and_wait(
                     button.center,
                     lambda current: (
                         current if is_taobao_discovery_page(current.items) else None
@@ -366,17 +368,17 @@ class TaobaoAutomation(FarmAutomation):
                     interval=500,
                     error=f"点击“{task.name}”后未进入商品浏览页面",
                 )
-                swipe_browse(self.adb, duration_seconds=18)
+                swipe_browse(self.adb, 18, clock=self.screen.clock, log=self.log)
             elif task.operation is TaobaoTaskOperation.COINS_STAY:
-                print(f"开始执行“{task.name}”")
+                self.log(f"开始执行“{task.name}”")
                 self.adb.tap(button.center)
-                print("已点击“去淘金币”，等待 3 秒自动跳转")
-                time.sleep(3)
-                print("淘金币页面停留 8 秒")
-                time.sleep(8)
+                self.log("已点击“去淘金币”，等待 3 秒自动跳转")
+                self.screen.clock.sleep(3)
+                self.log("淘金币页面停留 8 秒")
+                self.screen.clock.sleep(8)
             elif task.operation is TaobaoTaskOperation.STAY:
-                print("开始执行“看严选推荐商品”")
-                self.tap_and_wait(
+                self.log("开始执行“看严选推荐商品”")
+                self.screen.tap_and_wait(
                     button.center,
                     lambda current: (
                         current
@@ -387,8 +389,8 @@ class TaobaoAutomation(FarmAutomation):
                     interval=500,
                     error="点击“看严选推荐商品”后未进入视频页面",
                 )
-                print("视频页面停留 18 秒")
-                time.sleep(18)
+                self.log("视频页面停留 18 秒")
+                self.screen.clock.sleep(18)
             else:
                 raise AutomationError(f"不支持的淘宝任务操作：{task.operation.value}")
 

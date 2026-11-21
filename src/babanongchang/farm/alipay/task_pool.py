@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 
-from babanongchang.handle import normalize_text
+from babanongchang.automation.handle import normalize_text
 
 
 class TaskOperation(Enum):

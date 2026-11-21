@@ -1,21 +1,24 @@
-"""CLI uses the system clock; Android supplies a cancellable active-time clock."""
-
-import time as _time
-
-
-backend = None
+import time
+from typing import Protocol
 
 
-def monotonic() -> float:
-    return _time.monotonic() if backend is None else backend.activeMillis() / 1000
+class Clock(Protocol):
+    def monotonic(self) -> float: ...
+
+    def sleep(self, seconds: float) -> None: ...
+
+    def checkpoint(self) -> None: ...
 
 
-def sleep(seconds: float) -> None:
-    if backend is None:
-        _time.sleep(seconds)
-    else:
-        backend.sleepMillis(round(seconds * 1000))
+class SystemClock:
+    def monotonic(self) -> float:
+        return time.monotonic()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def checkpoint(self) -> None:
+        pass
 
 
-def strftime(format: str) -> str:
-    return _time.strftime(format)
+SYSTEM_CLOCK = SystemClock()

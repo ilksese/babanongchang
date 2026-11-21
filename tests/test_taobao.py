@@ -1,10 +1,10 @@
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import ANY, Mock, patch
 
 import numpy as np
 
-from babanongchang.handle import OcrText, ScreenSnapshot
-from babanongchang.taobao import (
+from babanongchang.automation.handle import OcrText, ScreenSnapshot, TextHandle
+from babanongchang.farm.taobao.flow import (
     TaobaoAutomation,
     TaobaoTaskOperation,
     find_available_taobao_task,
@@ -59,9 +59,9 @@ class TaobaoAutomationTest(unittest.TestCase):
         before = ScreenSnapshot(
             image, (*titles, item("去淘金币逛买更省钱(0/1)", 306, 934), button)
         )
-        automation = TaobaoAutomation.__new__(TaobaoAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(side_effect=[before, ScreenSnapshot(image, titles)])
+        device = Mock()
+        automation = TaobaoAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(side_effect=[before, ScreenSnapshot(image, titles)])
         events = []
 
         automation.adb.tap = Mock(
@@ -71,7 +71,7 @@ class TaobaoAutomationTest(unittest.TestCase):
             side_effect=lambda: events.append("returned")
         )
         with patch(
-            "babanongchang.taobao.time.sleep",
+            "time.sleep",
             side_effect=lambda seconds: events.append(("slept", seconds)),
         ) as sleep:
             automation.complete_supported_tasks()
@@ -98,9 +98,9 @@ class TaobaoAutomationTest(unittest.TestCase):
             image,
             (item("浏览得奖励", 135, 101), item("下单得肥料+167000", 203, 671)),
         )
-        automation = TaobaoAutomation.__new__(TaobaoAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(
+        device = Mock()
+        automation = TaobaoAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(
             side_effect=[before, ScreenSnapshot(image, titles)]
         )
         events = []
@@ -112,19 +112,19 @@ class TaobaoAutomationTest(unittest.TestCase):
             self.assertIs(matcher(discovery), discovery)
             events.append("entered")
 
-        automation.tap_and_wait = Mock(side_effect=tap_and_wait)
+        automation.screen.tap_and_wait = Mock(side_effect=tap_and_wait)
         automation.return_to_fertilizer_tasks = Mock(
             side_effect=lambda: events.append("returned")
         )
         with patch(
-            "babanongchang.taobao.swipe_browse",
-            side_effect=lambda adb, duration_seconds: events.append(
+            "babanongchang.farm.taobao.flow.swipe_browse",
+            side_effect=lambda adb, duration_seconds, **kwargs: events.append(
                 ("browsed", duration_seconds)
             ),
         ) as swipe:
             automation.complete_supported_tasks()
 
-        automation.tap_and_wait.assert_called_once()
+        automation.screen.tap_and_wait.assert_called_once()
         swipe.assert_called_once()
         automation.return_to_fertilizer_tasks.assert_called_once_with()
         self.assertEqual(events, ["entered", ("browsed", 18), "returned"])
@@ -134,9 +134,9 @@ class TaobaoAutomationTest(unittest.TestCase):
             np.zeros((1600, 720, 3), dtype=np.uint8),
             (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345)),
         )
-        automation = TaobaoAutomation.__new__(TaobaoAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(return_value=snapshot)
+        device = Mock()
+        automation = TaobaoAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(return_value=snapshot)
         automation.complete_supported_tasks = Mock()
 
         automation.run()
@@ -152,14 +152,14 @@ class TaobaoAutomationTest(unittest.TestCase):
             image,
             (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345)),
         )
-        automation = TaobaoAutomation.__new__(TaobaoAutomation)
-        automation.adb = Mock()
-        automation.scan = Mock(side_effect=[ScreenSnapshot(image, ()), tasks])
+        device = Mock()
+        automation = TaobaoAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(side_effect=[ScreenSnapshot(image, ()), tasks])
 
         automation.ensure_fertilizer_tasks_page()
 
         automation.adb.start_activity.assert_called_once_with(automation.HOME_ACTIVITY)
-        self.assertEqual(automation.scan.call_count, 2)
+        self.assertEqual(automation.screen.scan.call_count, 2)
 
     def test_sign_in_clicks_once_and_rescans_without_returning(self) -> None:
         button = item("去签到", 600, 464)
@@ -167,8 +167,9 @@ class TaobaoAutomationTest(unittest.TestCase):
         titles = (item("做任务赚肥料", 360, 345), item("肥料明细", 81, 345))
         before = ScreenSnapshot(image, (*titles, button))
         after = ScreenSnapshot(image, (*titles, item("已签到", 600, 464)))
-        automation = TaobaoAutomation.__new__(TaobaoAutomation)
-        automation.scan = Mock(side_effect=[before, after])
+        device = Mock()
+        automation = TaobaoAutomation(device, TextHandle(device, ocr=Mock()))
+        automation.screen.scan = Mock(side_effect=[before, after])
         automation.return_to_fertilizer_tasks = Mock()
 
         def tap_and_wait(point, matcher, **kwargs):
@@ -176,13 +177,13 @@ class TaobaoAutomationTest(unittest.TestCase):
             self.assertIsNone(matcher(before))
             self.assertIs(matcher(after), after)
 
-        automation.tap_and_wait = Mock(side_effect=tap_and_wait)
+        automation.screen.tap_and_wait = Mock(side_effect=tap_and_wait)
 
         automation.complete_supported_tasks()
 
-        automation.tap_and_wait.assert_called_once()
+        automation.screen.tap_and_wait.assert_called_once()
         automation.return_to_fertilizer_tasks.assert_not_called()
-        self.assertEqual(automation.scan.call_count, 2)
+        self.assertEqual(automation.screen.scan.call_count, 2)
 
     def test_starts_home_activity_and_runs_complete_flow(self) -> None:
         adb = FakeAdb()

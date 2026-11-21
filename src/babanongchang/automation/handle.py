@@ -1,21 +1,14 @@
 from __future__ import annotations
 
-import logging
 import re
-from babanongchang import runtime as time
 from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, TypeVar, cast
 
 import numpy as np
 
-from babanongchang.config import PROJECT_CONFIG
-
-
-def RapidOCR():
-    from rapidocr import RapidOCR as Engine
-
-    return Engine()
+from babanongchang.config import ProjectConfig
+from babanongchang.runtime import Clock, SYSTEM_CLOCK
 
 
 class AutomationError(RuntimeError):
@@ -111,21 +104,25 @@ class TextHandle:
         self,
         adb: TextDevice,
         *,
-        ocr: OcrEngine | None = None,
+        ocr: OcrEngine,
         min_score: float = 0.75,
+        config: ProjectConfig = ProjectConfig(),
+        clock: Clock = SYSTEM_CLOCK,
     ) -> None:
         if not 0 <= min_score <= 1:
             raise ValueError("OCR 最低置信度必须在 0 到 1 之间")
-        logging.getLogger("RapidOCR").setLevel(logging.WARNING)
         self.adb = adb
-        self.ocr = ocr if ocr is not None else getattr(adb, "ocr", None)
-        if self.ocr is None:
-            self.ocr = cast(OcrEngine, RapidOCR())
+        self.ocr = ocr
         self.min_score = min_score
+        self.config = config
+        self.clock = clock
 
     def scan(self) -> ScreenSnapshot:
+        self.clock.checkpoint()
         image = self.adb.screenshot()
+        self.clock.checkpoint()
         result = self.ocr(image)
+        self.clock.checkpoint()
         if result.txts is None or result.boxes is None or result.scores is None:
             return ScreenSnapshot(image=image, items=())
         items = tuple(
@@ -251,18 +248,19 @@ class TextHandle:
         self,
         matcher: ScreenMatcher[T],
         *,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         interval: int | None = None,
         error: str = "等待目标页面超时",
     ) -> T:
         """持续扫描，直到 matcher 从同一帧中返回非 None 结果。"""
+        timeout = self.config.recognition_timeout_ms if timeout is None else timeout
         interval_seconds = self._validate_wait_arguments(timeout, interval)
-        deadline = time.monotonic() + timeout / 1000
-        while time.monotonic() < deadline:
+        deadline = self.clock.monotonic() + timeout / 1000
+        while self.clock.monotonic() < deadline:
             result = matcher(self.scan())
             if result is not None:
                 return result
-            time.sleep(interval_seconds)
+            self.clock.sleep(interval_seconds)
         raise WaitTimeoutError(error)
 
     def wait_for_stable_screen(
@@ -271,7 +269,7 @@ class TextHandle:
         *,
         stable_scans: int = 2,
         signature: Callable[[ScreenSnapshot], Hashable] | None = None,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         interval: int | None = None,
         error: str = "等待页面稳定超时",
     ) -> ScreenSnapshot:
@@ -310,7 +308,7 @@ class TextHandle:
         stable_scans: int = 2,
         position_tolerance: int = 8,
         screen_predicate: ScreenPredicate | None = None,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         interval: int | None = None,
         exact: bool = False,
         error: str | None = None,
@@ -354,7 +352,7 @@ class TextHandle:
     def wait_for_text(
         self,
         text: str | Sequence[str] = "",
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         *,
         exact: bool = False,
         region: RelativeRegion | None = None,
@@ -396,7 +394,7 @@ class TextHandle:
     def wait_for_all_text(
         self,
         texts: Sequence[str],
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         *,
         exact: bool = False,
         region: RelativeRegion | None = None,
@@ -413,7 +411,7 @@ class TextHandle:
     def wait_for_any_text(
         self,
         texts: Sequence[str],
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         *,
         exact: bool = False,
         region: RelativeRegion | None = None,
@@ -445,7 +443,7 @@ class TextHandle:
     def wait_for_text_gone(
         self,
         text: str,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         *,
         exact: bool = False,
         stable_scans: int = 1,
@@ -461,7 +459,7 @@ class TextHandle:
         self,
         text: str = "",
         wait: bool = True,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         *,
         exact: bool = False,
         region: RelativeRegion | None = None,
@@ -497,7 +495,7 @@ class TextHandle:
         point: tuple[int, int],
         matcher: ScreenMatcher[T],
         *,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         interval: int | None = None,
         error: str = "点击后未进入目标页面",
     ) -> T:
@@ -515,7 +513,7 @@ class TextHandle:
         text: str,
         matcher: ScreenMatcher[T],
         *,
-        timeout: int = PROJECT_CONFIG.recognition_timeout_ms,
+        timeout: int | None = None,
         click_timeout: int | None = None,
         interval: int | None = None,
         exact: bool = False,
@@ -537,12 +535,11 @@ class TextHandle:
             error=error,
         )
 
-    @staticmethod
-    def _validate_wait_arguments(timeout: int, interval: int | None) -> float:
+    def _validate_wait_arguments(self, timeout: int, interval: int | None) -> float:
         if timeout <= 0:
             raise ValueError("timeout 必须大于 0")
         resolved_interval = (
-            PROJECT_CONFIG.screenshot_interval_ms if interval is None else interval
+            self.config.screenshot_interval_ms if interval is None else interval
         )
         if resolved_interval <= 0:
             raise ValueError("interval 必须大于 0")

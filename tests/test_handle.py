@@ -1,15 +1,18 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import numpy as np
 
-from babanongchang.handle import (
+from babanongchang.automation.handle import (
     OcrText,
     RelativeRegion,
     ScreenSnapshot,
     TextHandle,
+    WaitTimeoutError,
     normalize_text,
 )
+from babanongchang.config import ProjectConfig
 
 
 IMAGE = np.zeros((1600, 720, 3), dtype=np.uint8)
@@ -41,7 +44,7 @@ class FakeScreenAdb(FakeTapAdb):
 
 class TextOperationHandle(TextHandle):
     def __init__(self, frames: list[ScreenSnapshot]) -> None:
-        self.adb = FakeTapAdb()
+        super().__init__(FakeScreenAdb(), ocr=Mock())
         self.frames = frames
 
     def scan(self) -> ScreenSnapshot:
@@ -99,6 +102,32 @@ class TextMatchingTest(unittest.TestCase):
 
 
 class TextWaitingTest(unittest.TestCase):
+    def test_wait_uses_each_runs_default_timeout_and_interval(self) -> None:
+        def new_handle(interval, timeout):
+            clock = Mock()
+            elapsed = 0.0
+
+            def sleep(seconds):
+                nonlocal elapsed
+                elapsed += seconds
+
+            clock.monotonic.side_effect = lambda: elapsed
+            clock.sleep.side_effect = sleep
+            handle = TextHandle(
+                FakeScreenAdb(), ocr=Mock(), clock=clock,
+                config=ProjectConfig(interval, timeout),
+            )
+            handle.scan = Mock(return_value=snapshot())
+            return handle, clock
+
+        for interval, timeout, scans in ((100, 250, 3), (50, 80, 2)):
+            with self.subTest(interval=interval):
+                handle, clock = new_handle(interval, timeout)
+                with self.assertRaises(WaitTimeoutError):
+                    handle.wait_for_text("没有出现")
+                self.assertEqual(handle.scan.call_count, scans)
+                self.assertEqual([entry.args for entry in clock.sleep.call_args_list], [(interval / 1000,)] * scans)
+
     def test_wait_for_text_returns_center(self) -> None:
         handle = TextOperationHandle([snapshot(item("立即领取", 320, 640))])
         self.assertEqual(handle.wait_for_text("立即领取"), (320, 640))
