@@ -5,6 +5,7 @@ import re
 import cv2
 import numpy as np
 
+from babanongchang import runtime as time
 from babanongchang.browsing import swipe_browse
 from babanongchang.handle import AutomationError, OcrText, ScreenSnapshot, TextHandle
 
@@ -292,6 +293,7 @@ class MajiangAutomation(TextHandle):
         snapshot = self.scan()
         snapshot = self.finish_ad() if is_reward_ad(snapshot) else self.wait_for_game()
         while True:
+            time.checkpoint()
             self.complete_level(snapshot)
             print("本关麻将已通关，准备进入下一关")
             self.click_text_and_wait(
@@ -340,6 +342,7 @@ class MajiangAutomation(TextHandle):
 
     def complete_level(self, snapshot: ScreenSnapshot) -> None:
         while not has_won(snapshot):
+            time.checkpoint()
             if has_time_dialog(snapshot):
                 snapshot = self.extend_time(snapshot)
                 continue

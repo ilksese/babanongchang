@@ -17,5 +17,10 @@ def sleep(seconds: float) -> None:
         backend.sleepMillis(round(seconds * 1000))
 
 
+def checkpoint() -> None:
+    if backend is not None:
+        backend.checkpoint()
+
+
 def strftime(format: str) -> str:
     return _time.strftime(format)

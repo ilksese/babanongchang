@@ -124,8 +124,11 @@ class TextHandle:
         self.min_score = min_score
 
     def scan(self) -> ScreenSnapshot:
+        time.checkpoint()
         image = self.adb.screenshot()
+        time.checkpoint()
         result = self.ocr(image)
+        time.checkpoint()
         if result.txts is None or result.boxes is None or result.scores is None:
             return ScreenSnapshot(image=image, items=())
         items = tuple(

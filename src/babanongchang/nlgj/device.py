@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
 import threading
 
@@ -11,15 +10,17 @@ import cv2
 import numpy as np
 
 from babanongchang.nlgj.recognition import normalize
+from babanongchang import runtime
+from babanongchang.adb_devices import list_adb_devices
 
 
 class Device:
     def __init__(self, serial: str | None, adb: str = "adb") -> None:
-        if not shutil.which(adb):
-            raise RuntimeError("adb not found. Install Android platform-tools first.")
-        output = subprocess.check_output([adb, "devices"], text=True, timeout=15)
-        devices = [line.split()[0] for line in output.splitlines()[1:]
-                   if len(line.split()) >= 2 and line.split()[1] == "device"]
+        try:
+            found = list_adb_devices(adb)
+        except FileNotFoundError as exc:
+            raise RuntimeError("adb not found. Install Android platform-tools first.") from exc
+        devices = [item.serial for item in found if item.state == "device"]
         if serial is None:
             if len(devices) != 1:
                 raise RuntimeError(f"Choose an authorized device using --serial; found {devices}")
@@ -32,7 +33,10 @@ class Device:
         self.package = self.foreground()
 
     def command(self, *args: str) -> bytes:
-        return subprocess.check_output(self.prefix + list(args), timeout=20)
+        runtime.checkpoint()
+        result = subprocess.check_output(self.prefix + list(args), timeout=20)
+        runtime.checkpoint()
+        return result
 
     def foreground(self) -> str:
         output = self.command("shell", "dumpsys", "activity", "activities").decode(errors="replace")
@@ -81,6 +85,7 @@ class AdScroller:
         upwards = True
         try:
             while not self.stopped.is_set():
+                runtime.checkpoint()
                 self.device.swipe_ad(upwards)
                 self.swipes += 1
                 upwards = not upwards

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import re
 import subprocess
+import sys
 from babanongchang import runtime as time
 from typing import Sequence
 
@@ -151,14 +152,17 @@ class Adb:
         self._run("shell", "svc", "power", "stayon", "true")
 
     def _run(self, *args: str, timeout: float = 30) -> subprocess.CompletedProcess[bytes]:
+        time.checkpoint()
         try:
-            return subprocess.run(
+            result = subprocess.run(
                 [*self.prefix, *args],
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=timeout,
             )
+            time.checkpoint()
+            return result
         except FileNotFoundError as exc:
             raise AutomationError("找不到 adb，请先将 Android platform-tools 加入 PATH") from exc
         except subprocess.TimeoutExpired as exc:
@@ -168,12 +172,12 @@ class Adb:
             raise AutomationError(f"ADB 命令失败：{detail or '未知错误'}") from exc
 
     def _select_device(self) -> str:
-        result = self._run("devices")
-        devices = [
-            line.split()[0]
-            for line in result.stdout.decode("utf-8", errors="replace").splitlines()[1:]
-            if len(line.split()) >= 2 and line.split()[1] == "device"
-        ]
+        from babanongchang.adb_devices import list_adb_devices
+
+        found = list_adb_devices(runner=lambda command: self._run(
+            *command[1:]
+        ).stdout.decode("utf-8", errors="replace"))
+        devices = [device.serial for device in found if device.state == "device"]
         if not devices:
             raise AutomationError("ADB 设备未连接或未授权")
         if len(devices) == 1:
@@ -789,9 +793,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "module",
         nargs="?",
-        choices=("all", "fertilize", "goods", "tasks", "taobao", "games"),
+        choices=("all", "fertilize", "goods", "tasks", "taobao", "games", "app"),
         default="all",
-        help="运行模块：all（默认，自动检测安装情况，支付宝优先，再执行淘宝）、fertilize（仅施肥）、goods（逛农货/百县百品）、tasks（做任务领肥料）、taobao（仅淘宝流程）或 games（需指定 --majiang 或 --nlgj）",
+        help="运行模块：app（桌面界面，不接受其他参数）、all（默认）、fertilize、goods、tasks、taobao 或 games",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
     games = parser.add_mutually_exclusive_group()
@@ -812,8 +816,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None, *, device_factory=None, game_device=None, game_reader=None) -> None:
+    actual_argv = list(argv) if argv is not None else sys.argv[1:]
     parser = build_parser()
-    args = parser.parse_args(argv)
+    if "app" in actual_argv and actual_argv != ["app"]:
+        parser.error("app 不接受其他参数")
+    args = parser.parse_args(actual_argv)
+    if args.module == "app":
+        from babanongchang.app import run_app
+
+        run_app()
+        return
+    from babanongchang.desktop_runtime import install_from_environment
+
+    install_from_environment()
     if (args.module == "games") != (args.majiang or args.nlgj):
         raise SystemExit("游戏请使用 games --majiang 或 games --nlgj")
     if args.threshold < 0 or args.browse_seconds < 15:
