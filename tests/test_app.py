@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
 import queue
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
 
 from babanongchang.adb_devices import AdbDevice, parse_adb_devices
+from babanongchang.winproc import hidden_subprocess_kwargs
 from babanongchang.app_core import (
     DeviceBoard,
     TaskProcess,
@@ -22,6 +24,7 @@ from babanongchang.app_core import (
 from babanongchang.app import FarmApp
 from babanongchang.cli import main
 from babanongchang.desktop_runtime import DesktopRuntimeBackend
+from babanongchang.launch import cli_command, desktop_argv
 
 
 class WindowIconTest(unittest.TestCase):
@@ -34,6 +37,21 @@ class WindowIconTest(unittest.TestCase):
 
 
 class AppDispatchTest(unittest.TestCase):
+    def test_frozen_app_reinvokes_itself_without_python_module(self) -> None:
+        executable = r"C:\app\babanongchang.exe"
+        self.assertEqual(
+            cli_command(["games", "--nlgj"], executable),
+            [executable, "-m", "babanongchang.cli", "games", "--nlgj"],
+        )
+        with patch("babanongchang.launch.sys") as frozen_sys:
+            frozen_sys.frozen = True
+            self.assertEqual(desktop_argv([]), ["app"])
+            self.assertEqual(
+                cli_command(["games", "--nlgj"], executable),
+                [executable, "games", "--nlgj"],
+            )
+            self.assertEqual(desktop_argv(["games", "--nlgj"]), ["games", "--nlgj"])
+
     def test_app_dispatch_does_not_create_adb(self) -> None:
         with (
             patch("babanongchang.app.run_app") as run_app,
@@ -50,6 +68,17 @@ class AppDispatchTest(unittest.TestCase):
 
 
 class AdbDeviceParsingTest(unittest.TestCase):
+    def test_refresh_hides_the_adb_console_on_windows(self) -> None:
+        with patch("babanongchang.adb_devices.subprocess.check_output", return_value="") as run:
+            from babanongchang.adb_devices import list_adb_devices
+
+            list_adb_devices()
+        if os.name == "nt":
+            self.assertEqual(run.call_args.kwargs["creationflags"] & subprocess.CREATE_NO_WINDOW, subprocess.CREATE_NO_WINDOW)
+        else:
+            self.assertNotIn("creationflags", run.call_args.kwargs)
+        self.assertEqual(hidden_subprocess_kwargs(1).get("creationflags", 0) & 1, 1 if os.name == "nt" else 0)
+
     def test_preserves_all_states_and_details(self) -> None:
         devices = parse_adb_devices(
             "List of devices attached\n"

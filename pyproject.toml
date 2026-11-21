@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 babanongchang = "babanongchang.cli:main"
+build = "babanongchang.desktop_build:main"
 
 [build-system]
 requires = ["hatchling"]

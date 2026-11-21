@@ -11,6 +11,7 @@ import numpy as np
 from babanongchang.nlgj.recognition import normalize
 from babanongchang.runtime import Clock, SYSTEM_CLOCK
 from babanongchang.adb_devices import list_adb_devices
+from babanongchang.winproc import hidden_subprocess_kwargs
 
 
 class AdbGameDevice:
@@ -35,7 +36,9 @@ class AdbGameDevice:
 
     def command(self, *args: str) -> bytes:
         self.clock.checkpoint()
-        result = subprocess.check_output(self.prefix + list(args), timeout=20)
+        result = subprocess.check_output(
+            self.prefix + list(args), timeout=20, **hidden_subprocess_kwargs(),
+        )
         self.clock.checkpoint()
         return result
 

@@ -17,8 +17,10 @@ from typing import Callable, Mapping
 
 from babanongchang.adb_devices import AdbDevice
 from babanongchang.desktop_runtime import CANCEL_FILE_ENV
+from babanongchang.launch import cli_command
 from babanongchang.nlgj.options import GameOptions
 from babanongchang.workflow import MIN_BROWSE_SECONDS, FarmOptions
+from babanongchang.winproc import hidden_subprocess_kwargs
 
 
 @dataclass(frozen=True)
@@ -189,12 +191,13 @@ class TaskProcess:
         command = [sys.executable, "-m", "babanongchang.cli", *arguments]
         options: dict[str, object] = {}
         if os.name == "nt":
-            options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            options.update(hidden_subprocess_kwargs(subprocess.CREATE_NEW_PROCESS_GROUP))
         else:
             options["start_new_session"] = True
         self.stop_requested = False
+        program = cli_command(arguments, sys.executable)
         self.process = subprocess.Popen(
-            command, cwd=cwd, env=environment, stdout=subprocess.PIPE,
+            program, cwd=cwd, env=environment, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
             bufsize=1, **options,
         )
@@ -226,6 +229,7 @@ class TaskProcess:
             subprocess.run(
                 ["taskkill", "/PID", str(process.pid), "/T", "/F"],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                **hidden_subprocess_kwargs(),
             )
         else:
             os.killpg(process.pid, signal.SIGKILL)

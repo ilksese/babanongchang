@@ -7,6 +7,7 @@ import numpy as np
 
 from babanongchang.automation.handle import AutomationError
 from babanongchang.runtime import Clock, SYSTEM_CLOCK
+from babanongchang.winproc import hidden_subprocess_kwargs
 
 
 class Adb:
@@ -35,6 +36,7 @@ class Adb:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=timeout,
+                **hidden_subprocess_kwargs(),
             )
             if check_cancel:
                 self.clock.checkpoint()
