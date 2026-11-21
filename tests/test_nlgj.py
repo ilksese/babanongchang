@@ -61,7 +61,7 @@ class NlgjIntegrationTest(unittest.TestCase):
 
     def test_invalid_selection_and_options_never_access_device(self):
         for options in (
-            ["games"], ["--nlgj"], ["games", "--nlgj", "--majiang"],
+            ["games"], ["--nlgj"], ["goods", "--nlgj"],
             ["games", "--nlgj", "--board-top", "0.9"],
             ["games", "--nlgj", "--target", "0"],
             ["games", "--nlgj", "--levels", "-1"],
@@ -78,17 +78,6 @@ class NlgjIntegrationTest(unittest.TestCase):
                 main()
             adb.assert_not_called()
             device.assert_not_called()
-
-    def test_majiang_dispatch_still_restores_screen_sleep(self):
-        with (
-            patch("sys.argv", ["babanongchang", "games", "--majiang"]),
-            patch("babanongchang.cli.Adb") as adb,
-            patch("babanongchang.majiang.MajiangAutomation") as game,
-        ):
-            main()
-        game.assert_called_once_with(adb.return_value)
-        game.return_value.run.assert_called_once_with()
-        adb.return_value.allow_screen_sleep.assert_called_once_with()
 
     def test_runtime_failure_becomes_safe_exit(self):
         with (

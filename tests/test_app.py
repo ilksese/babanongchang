@@ -60,8 +60,8 @@ class AppArgumentTest(unittest.TestCase):
             ["fertilize", "--serial", "phone", "--threshold", "900", "--max-clicks", "2"],
         )
         self.assertEqual(
-            build_arguments("majiang", {}, "phone"),
-            ["games", "--majiang", "--serial", "phone"],
+            build_arguments("nlgj", defaults_for(FEATURE_BY_KEY["nlgj"]), "phone"),
+            ["games", "--nlgj", "--serial", "phone"],
         )
 
     def test_offline_screenshot_needs_no_device_and_hides_online_limits(self) -> None:

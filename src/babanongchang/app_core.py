@@ -69,7 +69,6 @@ FEATURES = (
     FeatureSpec("goods", "逛农货", "浏览农货页面并领取奖励", (COMMON[1],)),
     FeatureSpec("tasks", "领取任务", "识别并完成支付宝农场任务", (COMMON[1],)),
     FeatureSpec("taobao", "淘宝农场", "执行淘宝芭芭农场流程"),
-    FeatureSpec("majiang", "麻将", "使用免费磁铁连续闯关，直到手动停止"),
     FeatureSpec("nlgj", "挪了个箭", "在线闯关，或离线分析一张截图", NLGJ_FIELDS),
 )
 FEATURE_BY_KEY = {feature.key: feature for feature in FEATURES}
@@ -160,10 +159,8 @@ def build_arguments(
         raise ValueError(next(iter(errors.values())))
     if requires_device(feature_key, values) and not serial:
         raise ValueError("请选择一台已授权设备")
-    args = ["games"] if feature_key in ("majiang", "nlgj") else [feature_key]
-    if feature_key == "majiang":
-        args.append("--majiang")
-    elif feature_key == "nlgj":
+    args = ["games"] if feature_key == "nlgj" else [feature_key]
+    if feature_key == "nlgj":
         args.append("--nlgj")
     if serial and requires_device(feature_key, values):
         args.extend(("--serial", serial))

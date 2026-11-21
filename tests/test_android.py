@@ -121,7 +121,7 @@ class AndroidEntryTest(unittest.TestCase):
             for module in ("all", "fertilize", "goods", "tasks", "taobao", "games"):
                 with self.subTest(module=module), patch("babanongchang.cli.main") as main:
                     bridge = Mock()
-                    options = "--majiang" if module == "games" else "--threshold 700 --max-clicks 2"
+                    options = "--nlgj" if module == "games" else "--threshold 700 --max-clicks 2"
                     android.run(bridge, module, options, output)
                     args, kwargs = main.call_args
                     self.assertEqual(args[0][0], module)

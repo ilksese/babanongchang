@@ -798,9 +798,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="运行模块：app（桌面界面，不接受其他参数）、all（默认）、fertilize、goods、tasks、taobao 或 games",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
-    games = parser.add_mutually_exclusive_group()
-    games.add_argument("--majiang", action="store_true", help="games 模块：使用免费磁铁连续闯关，直到手动停止或步骤超时")
-    games.add_argument("--nlgj", action="store_true", help="games 模块：挪了个箭，默认最多通关 3 次或运行 15 分钟")
+    parser.add_argument("--nlgj", action="store_true", help="games 模块：挪了个箭，默认最多通关 3 次或运行 15 分钟")
     from babanongchang.nlgj.cli import add_arguments
 
     add_arguments(parser)
@@ -829,8 +827,8 @@ def main(argv: Sequence[str] | None = None, *, device_factory=None, game_device=
     from babanongchang.desktop_runtime import install_from_environment
 
     install_from_environment()
-    if (args.module == "games") != (args.majiang or args.nlgj):
-        raise SystemExit("游戏请使用 games --majiang 或 games --nlgj")
+    if (args.module == "games") != args.nlgj:
+        raise SystemExit("游戏请使用 games --nlgj")
     if args.threshold < 0 or args.browse_seconds < 15:
         raise SystemExit("threshold 不能为负数，browse-seconds 不能少于 15 秒")
     if args.max_clicks is not None and args.max_clicks < 1:
@@ -845,11 +843,7 @@ def main(argv: Sequence[str] | None = None, *, device_factory=None, game_device=
     adb: Adb | None = None
     try:
         adb = (device_factory or Adb)(args.serial)
-        if args.module == "games":
-            from babanongchang.majiang import MajiangAutomation
-
-            MajiangAutomation(adb).run()
-        elif args.module == "all":
+        if args.module == "all":
             run_workflow(
                 adb,
                 threshold=args.threshold,

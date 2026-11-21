@@ -45,7 +45,7 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
             try {
                 outputDirectory.mkdirs()
                 val index = when (module) {
-                    "games" -> if (options.contains("--majiang")) 5 else 6
+                    "games" -> 5
                     else -> FarmFeatures.titles.indices.firstOrNull { FarmFeatures.module(it) == module } ?: 0
                 }
                 record = history.create(FarmFeatures.titles[index], module, options)
