@@ -14,6 +14,7 @@ import tempfile
 import threading
 from typing import Callable, Mapping
 
+from babanongchang.adb_devices import AdbDevice
 from babanongchang.desktop_runtime import CANCEL_FILE_ENV
 from babanongchang.nlgj.options import GameOptions
 from babanongchang.workflow import MIN_BROWSE_SECONDS, FarmOptions
@@ -227,6 +228,182 @@ class TaskProcess:
             )
         else:
             os.killpg(process.pid, signal.SIGKILL)
+
+
+def resolve_nlgj_output(output: str | None) -> str:
+    text = (output or "").strip() or GameOptions.output.as_posix()
+    return str(Path(text).resolve())
+
+
+@dataclass
+class DeviceRun:
+    feature_key: str
+    feature_title: str
+    output_dir: str | None
+    status_title: str
+    status_detail: str
+    disconnected: bool = False
+    stopping: bool = False
+    model: str | None = None
+
+
+class DeviceBoard:
+    """Which phones are listed, which jobs are live, and the log kept for each."""
+
+    def __init__(self) -> None:
+        self.devices: dict[str, AdbDevice] = {}
+        self.order: tuple[str, ...] = ()
+        self.runs: dict[str, DeviceRun] = {}
+        self.logs: dict[str, str] = {}
+        self.results: dict[str, tuple[str, str]] = {}
+        self.selected: str | None = None
+
+    def apply_devices(self, devices: tuple[AdbDevice, ...]) -> None:
+        found = {device.serial: device for device in devices}
+        self.devices = dict(found)
+        visible = [device.serial for device in devices]
+        for device in devices:
+            run = self.runs.get(device.serial)
+            if run is None:
+                continue
+            run.disconnected = False
+            if device.model:
+                run.model = device.model
+        for serial, run in self.runs.items():
+            if serial not in found:
+                run.disconnected = True
+                visible.append(serial)
+        kept = set(visible)
+        for serial in list(self.logs):
+            if serial not in kept:
+                del self.logs[serial]
+        for serial in list(self.results):
+            if serial not in kept:
+                del self.results[serial]
+        if self.selected not in kept:
+            self.selected = None
+        self.order = tuple(visible)
+
+    def select(self, serial: str | None) -> None:
+        if serial is not None and serial not in self.order:
+            return
+        self.selected = serial
+
+    def can_start(self, serial: str | None = None) -> bool:
+        chosen = self.selected if serial is None else serial
+        if not chosen or chosen in self.runs:
+            return False
+        device = self.devices.get(chosen)
+        return device is not None and device.state == "device"
+
+    def can_stop(self, serial: str | None = None) -> bool:
+        chosen = self.selected if serial is None else serial
+        run = self.runs.get(chosen or "")
+        return run is not None and not run.stopping
+
+    def output_conflict(self, feature_key: str, output: str | None) -> str | None:
+        if feature_key != "nlgj":
+            return None
+        target = resolve_nlgj_output(output)
+        for run in self.runs.values():
+            if run.feature_key == "nlgj" and run.output_dir == target:
+                return "另一台正在把挪了个箭写入同一输出目录，请改输出目录。"
+        return None
+
+    def begin(self, serial: str, feature_key: str, feature_title: str, output: str | None) -> None:
+        device = self.devices.get(serial)
+        self.runs[serial] = DeviceRun(
+            feature_key=feature_key,
+            feature_title=feature_title,
+            output_dir=resolve_nlgj_output(output) if feature_key == "nlgj" else None,
+            status_title="运行中",
+            status_detail=f"正在执行：{feature_title}",
+            model=device.model if device else None,
+        )
+        self.logs[serial] = ""
+        self.results.pop(serial, None)
+
+    def append_log(self, serial: str, text: str) -> None:
+        if serial not in self.logs and serial not in self.runs:
+            return
+        self.logs[serial] = self.logs.get(serial, "") + text
+
+    def request_stop(self, serial: str) -> None:
+        run = self.runs[serial]
+        run.stopping = True
+        run.status_title = "正在停止"
+        run.status_detail = "已请求安全停止；正在等待当前设备操作结束…"
+
+    def finish(self, serial: str, *, code: int, stopped: bool, forced: bool) -> None:
+        if forced:
+            title, detail = "被强制终止", "最后一次设备操作结果可能未确认"
+        elif stopped:
+            title, detail = "已由用户停止", "任务已完成清理"
+        elif code == 0:
+            title, detail = "已完成", "流程正常结束；业务结果请以日志为准"
+        else:
+            title, detail = "运行失败", f"子进程退出码：{code}"
+        self.runs.pop(serial, None)
+        if serial not in self.devices:
+            self.logs.pop(serial, None)
+            self.results.pop(serial, None)
+            self.order = tuple(item for item in self.order if item != serial)
+            if self.selected == serial:
+                self.selected = None
+            return
+        self.results[serial] = (title, detail)
+
+    def header(self) -> tuple[str, str]:
+        serial = self.selected
+        if serial is None:
+            if self.runs:
+                return f"{len(self.runs)} 台运行中", "选择一台设备查看日志"
+            authorized = sum(1 for device in self.devices.values() if device.state == "device")
+            detail = f"发现 {authorized} 台可用设备" if authorized else "未发现已授权设备；可检查连接后刷新"
+            return "就绪", detail
+        run = self.runs.get(serial)
+        if run is not None:
+            if run.disconnected:
+                detail = "已请求安全停止；ADB 已看不到此设备" if run.stopping else "ADB 已看不到此设备，任务仍在运行"
+                return "已断开", detail
+            return run.status_title, run.status_detail
+        if serial in self.results:
+            return self.results[serial]
+        device = self.devices.get(serial)
+        if device is None or device.state != "device":
+            return "无法开始", "设备未授权或未连接"
+        return "就绪", "空闲，可开始作业"
+
+    def row_text(self, serial: str) -> str:
+        device = self.devices.get(serial)
+        run = self.runs.get(serial)
+        model = device.model if device is not None and device.model else None
+        if model is None and run is not None:
+            model = run.model
+        if run is not None:
+            if run.disconnected:
+                state = "已断开"
+            elif run.stopping:
+                state = "正在停止"
+            else:
+                state = f"运行中 · {run.feature_title}"
+            result = ""
+        else:
+            if device is None:
+                state = "已移除"
+            elif device.state == "device":
+                state = "空闲"
+            elif device.state == "unauthorized":
+                state = "未授权"
+            elif device.state == "offline":
+                state = "离线"
+            else:
+                state = device.state
+            result = self.results.get(serial, ("", ""))[0]
+        text = f"{serial} · {model or '未知型号'} · {state}"
+        if result:
+            text += f" · {result}"
+        return text
 
 
 def save_ocr_config(path: Path, screenshot_interval_ms: int, recognition_timeout_ms: int) -> None:

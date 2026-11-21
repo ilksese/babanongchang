@@ -5,8 +5,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from babanongchang.adb_devices import parse_adb_devices
+from babanongchang.adb_devices import AdbDevice, parse_adb_devices
 from babanongchang.app_core import (
+    DeviceBoard,
     TaskProcess,
     build_arguments,
     defaults_for,
@@ -15,8 +16,18 @@ from babanongchang.app_core import (
     save_ocr_config,
     validate_settings,
 )
+from babanongchang.app import FarmApp
 from babanongchang.cli import main
 from babanongchang.desktop_runtime import DesktopRuntimeBackend
+
+
+class WindowIconTest(unittest.TestCase):
+    def test_packaged_icon_is_readable(self) -> None:
+        from importlib.resources import files
+
+        icon = files("babanongchang").joinpath("icon.png")
+        self.assertTrue(icon.is_file())
+        self.assertGreater(icon.stat().st_size, 1000)
 
 
 class AppDispatchTest(unittest.TestCase):
@@ -132,6 +143,166 @@ class DesktopCancellationTest(unittest.TestCase):
                 kinds.append(kind)
         self.assertIn("log", kinds)
         self.assertEqual(kinds[-1], "exit")
+
+
+def _device(serial: str, state: str = "device", model: str | None = None) -> AdbDevice:
+    details = (("model", model),) if model else ()
+    return AdbDevice(serial, state, details)
+
+
+class _FakeRoot:
+    def __init__(self) -> None:
+        self.after_calls: list[tuple[int, object]] = []
+        self.cancelled: list[str] = []
+        self._next = 0
+
+    def after(self, delay: int, callback) -> str:
+        self._next += 1
+        token = f"after-{self._next}"
+        self.after_calls.append((delay, callback))
+        return token
+
+    def after_cancel(self, token: str) -> None:
+        self.cancelled.append(token)
+
+
+class DevicePollTest(unittest.TestCase):
+    def test_poll_refreshes_quietly_and_reschedules(self) -> None:
+        app = FarmApp.__new__(FarmApp)
+        app.root = _FakeRoot()
+        app.board = DeviceBoard()
+        app.close_after_stop = False
+        app._discovering = False
+        app._device_poll_ms = 3000
+        app._device_poll_timer = None
+        app.refresh_button = type("Button", (), {"configure": lambda *args, **kwargs: None})()
+        statuses: list[tuple[str, str]] = []
+        started: list[bool] = []
+        app._set_status = lambda title, detail: statuses.append((title, detail))
+        app._discover_devices = lambda: started.append(True)
+
+        app._schedule_device_poll()
+        self.assertEqual(app.root.after_calls[-1][0], 3000)
+        app.root.after_calls[-1][1]()
+
+        self.assertTrue(started)
+        self.assertEqual(statuses, [])
+        self.assertIsNotNone(app._device_poll_timer)
+        self.assertEqual(len(app.root.after_calls), 2)
+
+    def test_close_cancels_pending_poll(self) -> None:
+        app = FarmApp.__new__(FarmApp)
+        app.root = _FakeRoot()
+        app.runners = {}
+        app.close_after_stop = False
+        app._device_poll_timer = "after-1"
+        destroyed: list[bool] = []
+        app.root.destroy = lambda: destroyed.append(True)
+
+        app._close()
+
+        self.assertEqual(app.root.cancelled, ["after-1"])
+        self.assertIsNone(app._device_poll_timer)
+        self.assertTrue(destroyed)
+
+
+class DeviceBoardTest(unittest.TestCase):
+    def test_jobs_stay_independent_and_new_phones_do_not_start(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A", model="Pixel"), _device("B", "unauthorized"), _device("C", "offline")))
+        board.select("A")
+        self.assertFalse(board.can_start("B"))
+        self.assertFalse(board.can_start("C"))
+        board.begin("A", "all", "一键照料", None)
+        board.apply_devices((_device("A", model="Pixel"), _device("D", model="New")))
+        self.assertNotIn("D", board.runs)
+        self.assertFalse(board.runs["A"].disconnected)
+        self.assertFalse(board.can_start("A"))
+        self.assertFalse(board.can_start())
+        self.assertTrue(board.can_stop("A"))
+        board.select(None)
+        self.assertFalse(board.can_start())
+        self.assertFalse(board.can_stop())
+        self.assertEqual(board.header(), ("1 台运行中", "选择一台设备查看日志"))
+
+    def test_missing_live_serial_stays_until_exit(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A", model="Pixel"), _device("B")))
+        board.select("A")
+        board.begin("A", "all", "一键照料", None)
+        board.append_log("A", "hello\n")
+        board.apply_devices((_device("B"),))
+        self.assertIn("A", board.order)
+        self.assertTrue(board.runs["A"].disconnected)
+        self.assertEqual(board.selected, "A")
+        self.assertEqual(board.header(), ("已断开", "ADB 已看不到此设备，任务仍在运行"))
+        board.request_stop("A")
+        self.assertEqual(board.header()[1], "已请求安全停止；ADB 已看不到此设备")
+        board.finish("A", code=0, stopped=True, forced=False)
+        self.assertNotIn("A", board.order)
+        self.assertNotIn("A", board.logs)
+        self.assertIsNone(board.selected)
+
+    def test_same_serial_reappearing_clears_disconnected(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A", model="Pixel"),))
+        board.begin("A", "all", "一键照料", None)
+        board.apply_devices(())
+        board.apply_devices((_device("A", model="Pixel 2"),))
+        self.assertFalse(board.runs["A"].disconnected)
+        self.assertEqual(board.runs["A"].model, "Pixel 2")
+        self.assertEqual(board.order.count("A"), 1)
+
+    def test_idle_disappearance_drops_log_and_result(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A"), _device("B")))
+        board.logs["A"] = "session"
+        board.results["A"] = ("已完成", "流程正常结束；业务结果请以日志为准")
+        board.select("A")
+        board.apply_devices((_device("B"),))
+        self.assertEqual(board.order, ("B",))
+        self.assertNotIn("A", board.logs)
+        self.assertNotIn("A", board.results)
+        self.assertIsNone(board.selected)
+
+    def test_nlgj_output_conflict_uses_resolved_path(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A"), _device("B")))
+        board.begin("A", "nlgj", "挪了个箭", "")
+        message = "另一台正在把挪了个箭写入同一输出目录，请改输出目录。"
+        self.assertEqual(board.output_conflict("nlgj", None), message)
+        self.assertEqual(board.output_conflict("nlgj", str(Path("artifacts/nlgj").resolve())), message)
+        self.assertIsNone(board.output_conflict("nlgj", "artifacts/other"))
+        self.assertIsNone(board.output_conflict("fertilize", "artifacts/nlgj"))
+
+    def test_restart_clears_only_that_devices_log(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A"), _device("B")))
+        board.begin("A", "all", "一键照料", None)
+        board.begin("B", "fertilize", "施肥", None)
+        board.append_log("A", "old-a")
+        board.append_log("B", "keep-b")
+        board.finish("A", code=0, stopped=False, forced=False)
+        self.assertEqual(board.results["A"][0], "已完成")
+        board.begin("A", "all", "一键照料", None)
+        self.assertEqual(board.logs["A"], "")
+        self.assertEqual(board.logs["B"], "keep-b")
+        self.assertNotIn("A", board.results)
+
+    def test_finish_results_and_row_text(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A", model="Pixel"), _device("B", "unauthorized")))
+        board.begin("A", "all", "一键照料", None)
+        board.finish("A", code=2, stopped=False, forced=False)
+        board.select("A")
+        self.assertEqual(board.header(), ("运行失败", "子进程退出码：2"))
+        self.assertIn("Pixel", board.row_text("A"))
+        self.assertIn("运行失败", board.row_text("A"))
+        board.select("B")
+        self.assertEqual(board.header(), ("无法开始", "设备未授权或未连接"))
+        self.assertIn("未授权", board.row_text("B"))
+        board.finish("missing", code=0, stopped=False, forced=True)
+        self.assertEqual(board.order, ("A", "B"))
 
 
 if __name__ == "__main__":
