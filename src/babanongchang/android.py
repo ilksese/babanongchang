@@ -23,8 +23,6 @@ def run(bridge, module, options, output_dir, taobao_min_score=FarmOptions.taobao
         raise ValueError("APK 不支持桌面界面")
     if args.serial or args.adb != "adb":
         raise ValueError("APK 操作本机，不支持 --serial 或 --adb")
-    if args.screenshot and not args.nlgj:
-        raise ValueError("离线截图识别请使用 挪了个箭")
     farm = farm_options(args, taobao_min_score=taobao_min_score)
     root = Path(output_dir).resolve()
     clock = AndroidClock(bridge)
@@ -41,9 +39,8 @@ def run(bridge, module, options, output_dir, taobao_min_score=FarmOptions.taobao
             game = replace(
                 game,
                 output=root if game.output == GameOptions.output else root / game.output,
-                screenshot=None if game.screenshot is None else root / game.screenshot,
             )
-            play(game, device=None if game.screenshot else AndroidGameDevice(device),
+            play(game, device=AndroidGameDevice(device),
                  reader=AndroidScreenReader(device.ocr), clock=clock, log=log)
         else:
             root.mkdir(parents=True, exist_ok=True)

@@ -1,7 +1,6 @@
 package com.babanongchang.android
 
 import androidx.test.platform.app.InstrumentationRegistry
-import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
 import org.json.JSONArray
@@ -10,32 +9,6 @@ import android.content.pm.PackageManager
 
 /** No accessibility authorization, target apps or network access are needed. */
 class OfflineOcrTest {
-    class OfflineBridge {
-        val logs = mutableListOf<String>()
-        fun checkpoint() = Unit
-        fun log(text: String) { logs += text }
-    }
-
-    @Test
-    fun testOfflineGameRunsThroughKotlinBridge() {
-        val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val context = instrumentation.targetContext
-        val directory = File(context.cacheDir, "offline-game-test").apply { mkdirs() }
-        val input = File(directory, "fixture.png")
-        instrumentation.context.assets.open("ocr.png").use { source ->
-            input.outputStream().use { source.copyTo(it) }
-        }
-        val python = CliPython.get(context)
-        val bridge = OfflineBridge()
-        python.getModule("babanongchang.android").callAttr(
-            "run", bridge, "games", "--nlgj --screenshot fixture.png --output result --ocr", directory.absolutePath,
-        )
-        val report = JSONObject(File(directory, "result/report.json").readText())
-        assertTrue(report.getJSONArray("ocr").length() > 0)
-        assertTrue(File(directory, "result/annotated.png").isFile)
-        assertTrue(bridge.logs.any { it.contains("\"ocr\"") })
-    }
-
     @Test
     fun testPackagedOcrMatchesDesktopFixture() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()

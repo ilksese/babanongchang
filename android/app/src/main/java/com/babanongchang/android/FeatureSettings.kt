@@ -45,9 +45,6 @@ object FeatureSettings {
             if (streak == "coins-or-abandon" || streak == "stop") args += "--streak-policy $streak"
             if (!preferences.getBoolean(key(index, "revive-ads"), true)) args += "--no-revive-ads"
             if (preferences.getBoolean(key(index, "dry-run"), false)) args += "--dry-run"
-            if (preferences.getBoolean(key(index, "offline"), false)) {
-                preferences.getString(key(index, "screenshot"), null)?.let { args += "--screenshot '$it' --ocr" }
-            }
         }
         return FarmFeatures.options(index, args.joinToString(" "))
     }

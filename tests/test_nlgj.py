@@ -7,7 +7,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import ANY, Mock, patch
 
-import cv2
 import numpy as np
 
 from babanongchang.cli import main
@@ -25,21 +24,20 @@ def arrow_board():
 
 
 class NlgjIntegrationTest(unittest.TestCase):
-    def test_offline_command_recognizes_board_and_writes_report_without_adb(self):
+    def test_dry_run_recognizes_device_board_and_writes_report_without_tapping(self):
         with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / "board.png"
-            output = Path(directory) / "output"
-            cv2.imwrite(str(image), arrow_board())
+            output = Path(directory)
+            image = arrow_board()
             with (
-                patch("sys.argv", ["babanongchang", "games", "--nlgj",
-                                   "--screenshot", str(image), "--output", str(output)]),
-                patch("babanongchang.cli.Adb") as adb,
                 patch("babanongchang.adapters.adb_game.AdbGameDevice") as device,
+                patch.object(ScreenReader, "read", return_value=[]),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
-                main()
-            adb.assert_not_called()
-            device.assert_not_called()
+                device.return_value.package = "game"
+                device.return_value.screenshot.side_effect = [image, image]
+                main(["games", "--nlgj", "--dry-run", "--output", directory])
+            self.assertEqual(device.return_value.screenshot.call_count, 2)
+            device.return_value.tap.assert_not_called()
             report = json.loads((output / "report.json").read_text())
             self.assertTrue(report["valid"], report["reason"])
             self.assertEqual(report["arrows"], 2)
@@ -65,6 +63,8 @@ class NlgjIntegrationTest(unittest.TestCase):
     def test_invalid_selection_and_options_never_access_device(self):
         for options in (
             ["games"], ["--nlgj"], ["goods", "--nlgj"],
+            ["games", "--nlgj", "--screenshot", "board.png"],
+            ["games", "--nlgj", "--ocr"],
             ["games", "--nlgj", "--board-top", "0.9"],
             ["games", "--nlgj", "--target", "0"],
             ["games", "--nlgj", "--levels", "-1"],

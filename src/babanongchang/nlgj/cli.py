@@ -32,5 +32,3 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--board-bottom", type=float, default=defaults.board_bottom)
     group.add_argument("--output", type=Path, default=defaults.output)
     group.add_argument("--dry-run", action="store_true", help="Inspect the current device without tapping")
-    group.add_argument("--screenshot", type=Path, help="Offline recognition; no device actions")
-    group.add_argument("--ocr", action="store_true", help="Include OCR and popup action in offline report")

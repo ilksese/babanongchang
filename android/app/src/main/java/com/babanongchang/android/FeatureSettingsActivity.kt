@@ -112,9 +112,6 @@ class FeatureSettingsActivity : Activity() {
             choices(strategy, "streak-policy", listOf("coins-or-abandon" to "连胜：金币足够则使用，否则放弃", "stop" to "连胜：遇到需要金币时停止"), "coins-or-abandon")
             val inspect = card("画面识别")
             toggle(inspect, "dry-run", "仅识别当前画面，不点击", false)
-            if (preferences.contains(FeatureSettings.key(index, "screenshot"))) {
-                toggle(inspect, "offline", "使用已导入截图（不操作游戏）", false)
-            }
         }
         if (index == 0 || index == 4) {
             val ocr = card("淘宝文字识别")

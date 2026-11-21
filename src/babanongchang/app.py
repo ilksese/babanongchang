@@ -17,7 +17,6 @@ from babanongchang.app_core import (
     build_arguments,
     defaults_for,
     effective_parameters,
-    requires_device,
     save_ocr_config,
     validate_settings,
 )
@@ -224,7 +223,7 @@ class FarmApp:
                 control = self.ttk.Entry(row, textvariable=var)
             control.grid(row=0, column=1, sticky="ew")
             self.parameter_controls.append((control, "readonly" if field.kind == "choice" else "normal"))
-            if field.kind in ("file", "directory"):
+            if field.kind == "directory":
                 chooser = self.ttk.Button(row, text="选择…", command=lambda item=field: self._choose_path(item))
                 chooser.grid(row=0, column=2, padx=(7, 0))
                 self.parameter_controls.append((chooser, "normal"))
@@ -250,16 +249,11 @@ class FarmApp:
         self._update_dependencies()
 
     def _update_dependencies(self, *_args) -> None:
-        screenshot_var = self.vars.get("screenshot")
         target_var = self.vars.get("target")
-        screenshot = str(screenshot_var.get()).strip() if screenshot_var is not None else ""
         target = str(target_var.get()).strip() if target_var is not None else ""
-        offline_allowed = {"screenshot", "ocr", "output", "board_top", "board_bottom"}
         fields = {field.key: field for field in FEATURE_BY_KEY[self.feature_key].fields}
         for key, row in self.rows.items():
             visible = self.show_advanced or not fields[key].advanced
-            if self.feature_key == "nlgj" and screenshot and key not in offline_allowed:
-                visible = False
             if self.feature_key == "nlgj" and target and key in ("levels", "max_minutes"):
                 visible = False
             if visible:
@@ -270,7 +264,7 @@ class FarmApp:
 
     def _choose_path(self, field: FieldSpec) -> None:
         from tkinter import filedialog
-        path = filedialog.askopenfilename(title="选择离线截图") if field.kind == "file" else filedialog.askdirectory(title="选择输出目录")
+        path = filedialog.askdirectory(title="选择输出目录")
         if path:
             self.vars[field.key].set(str(Path(path).resolve()))
             self._update_dependencies()
@@ -322,8 +316,7 @@ class FarmApp:
 
     def _update_start_state(self) -> None:
         self._collect_values()
-        values = self.session_values[self.feature_key]
-        enabled = not self.runner.running and (not requires_device(self.feature_key, values) or self._selected_serial() is not None)
+        enabled = not self.runner.running and self._selected_serial() is not None
         self.start_button.configure(state="normal" if enabled else "disabled")
 
     def _confirm_start(self) -> None:
@@ -341,8 +334,7 @@ class FarmApp:
             messagebox.showerror("无法开始", str(exc))
             return
         feature = FEATURE_BY_KEY[self.feature_key]
-        offline = not requires_device(self.feature_key, values)
-        target = "仅分析本地截图，不操作手机" if offline else f"目标设备：{serial}\n将唤醒设备并真实操作支付宝、淘宝或游戏。"
+        target = f"目标设备：{serial}\n将唤醒设备并真实操作支付宝、淘宝或游戏。"
         parameter_text = " ".join(arguments)
         effective = effective_parameters(self.feature_key, values)
         effective_text = "\n".join(f"{label}：{value}" for label, value in effective) or "（无额外参数）"

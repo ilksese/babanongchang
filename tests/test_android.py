@@ -67,12 +67,12 @@ class AndroidDeviceTest(unittest.TestCase):
         self.bridge.swipe.assert_not_called()
         self.bridge.capture.assert_not_called()
 
-    def test_ocr_centers_can_be_serialized_in_offline_report(self):
+    def test_game_ocr_returns_text_centers(self):
         self.bridge.recognize.return_value = json.dumps([
             ["下一关", [[10, 20], [90, 20], [90, 40], [10, 40]], .97],
         ])
         lines = AndroidScreenReader(self.device.ocr).read(np.zeros((60, 100, 3), np.uint8))
-        self.assertEqual(json.loads(json.dumps(lines))[0][2:], [50, 30])
+        self.assertEqual(lines, [("下一关", .97, 50, 30)])
 
     def test_native_low_confidence_text_does_not_pass_shared_ocr_filter(self):
         self.bridge.capture.return_value = cv2.imencode(".png", np.zeros((60, 100, 3), np.uint8))[1].tobytes()
@@ -149,21 +149,6 @@ class AndroidEntryTest(unittest.TestCase):
                 android.run(Mock(), "all", "", output)
         close.assert_called_once_with()
 
-    def test_offline_recognition_runs_without_device_calls(self):
-        bridge = Mock()
-        bridge.capture.side_effect = AssertionError("offline captured device")
-        bridge.foreground.side_effect = AssertionError("offline queried device")
-        bridge.recognize.return_value = "[]"
-        with tempfile.TemporaryDirectory() as directory:
-            image = Path(directory) / "board with spaces.png"
-            cv2.imwrite(str(image), np.full((1600, 720, 3), 255, np.uint8))
-            android.run(bridge, "games", "--nlgj --screenshot 'board with spaces.png' --output report --ocr", directory)
-            self.assertTrue((Path(directory) / "report/report.json").is_file())
-            self.assertTrue((Path(directory) / "report/annotated.png").is_file())
-        bridge.tap.assert_not_called()
-        bridge.capture.assert_not_called()
-        bridge.foreground.assert_not_called()
-
     def test_rejects_adb_options_on_phone(self):
         for options in ("--serial device", "--adb custom-adb"):
             with self.subTest(options=options), self.assertRaisesRegex(ValueError, "不支持"):
@@ -173,9 +158,10 @@ class AndroidEntryTest(unittest.TestCase):
         bridge = Mock()
         bridge.foreground.return_value = "game"
         with tempfile.TemporaryDirectory() as output, patch("babanongchang.nlgj.runner.play") as play:
-            android.run(bridge, "games", "--nlgj --mode fast --target 100", output)
+            android.run(bridge, "games", "--nlgj --mode fast --target 100 --dry-run", output)
         self.assertEqual(play.call_args.args[0].target, 100)
         self.assertEqual(play.call_args.args[0].mode, "fast")
+        self.assertTrue(play.call_args.args[0].dry_run)
         self.assertEqual(play.call_args.args[0].output, Path(output).resolve())
         self.assertIsInstance(play.call_args.kwargs["device"], AndroidGameDevice)
         self.assertIsInstance(play.call_args.kwargs["reader"], AndroidScreenReader)

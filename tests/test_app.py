@@ -12,7 +12,6 @@ from babanongchang.app_core import (
     defaults_for,
     effective_parameters,
     FEATURE_BY_KEY,
-    requires_device,
     save_ocr_config,
     validate_settings,
 )
@@ -64,40 +63,37 @@ class AppArgumentTest(unittest.TestCase):
             ["games", "--nlgj", "--serial", "phone"],
         )
 
-    def test_offline_screenshot_needs_no_device_and_hides_online_limits(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            screenshot = Path(directory) / "board.png"
-            screenshot.touch()
-            values = defaults_for(FEATURE_BY_KEY["nlgj"])
-            values.update({"screenshot": str(screenshot), "ocr": True, "target": "12"})
-            self.assertFalse(requires_device("nlgj", values))
-            arguments = build_arguments("nlgj", values, None)
-            self.assertEqual(arguments[:2], ["games", "--nlgj"])
-            self.assertIn("--screenshot", arguments)
-            self.assertIn("--ocr", arguments)
-            self.assertNotIn("--target", arguments)
-            self.assertNotIn("--levels", arguments)
-            labels = dict(effective_parameters("nlgj", values))
-            self.assertNotIn("通关次数", labels)
-            self.assertNotIn("允许广告复活", labels)
-            self.assertEqual(labels["离线报告包含 OCR"], "是")
+    def test_game_requires_device_even_when_only_inspecting(self) -> None:
+        values = defaults_for(FEATURE_BY_KEY["nlgj"])
+        self.assertNotIn("screenshot", values)
+        self.assertNotIn("ocr", values)
+        for dry_run in (False, True):
+            values["dry_run"] = dry_run
+            with self.subTest(dry_run=dry_run), self.assertRaisesRegex(ValueError, "已授权设备"):
+                build_arguments("nlgj", values, None)
+        self.assertEqual(
+            build_arguments("nlgj", values, "phone"),
+            ["games", "--nlgj", "--serial", "phone", "--dry-run"],
+        )
 
     def test_validates_linked_game_fields(self) -> None:
         values = defaults_for(FEATURE_BY_KEY["nlgj"])
         values["board_top"] = "0.9"
         values["board_bottom"] = "0.2"
-        values["ocr"] = True
         errors = validate_settings("nlgj", values)
         self.assertIn("board_bottom", errors)
-        self.assertIn("ocr", errors)
 
-    def test_hidden_online_values_do_not_block_offline_analysis(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            screenshot = Path(directory) / "board.png"
-            screenshot.touch()
-            values = defaults_for(FEATURE_BY_KEY["nlgj"])
-            values.update({"screenshot": str(screenshot), "levels": "bad", "max_minutes": "bad"})
-            self.assertEqual(validate_settings("nlgj", values), {})
+    def test_target_overrides_game_limits(self) -> None:
+        values = defaults_for(FEATURE_BY_KEY["nlgj"])
+        values.update({"target": "12", "levels": "bad", "max_minutes": "bad"})
+        self.assertEqual(validate_settings("nlgj", values), {})
+        self.assertEqual(
+            build_arguments("nlgj", values, "phone"),
+            ["games", "--nlgj", "--serial", "phone", "--target", "12"],
+        )
+        labels = dict(effective_parameters("nlgj", values))
+        self.assertNotIn("通关次数", labels)
+        self.assertNotIn("最长运行时间（分钟）", labels)
 
 
 class OcrConfigWritingTest(unittest.TestCase):

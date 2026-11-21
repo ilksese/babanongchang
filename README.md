@@ -47,8 +47,6 @@ uv run babanongchang games --nlgj
 uv run babanongchang games --nlgj --dry-run
 # 快速模式：按分析出的顺序每 300ms 点击一条箭头
 uv run babanongchang games --nlgj --mode fast --serial <ADB_SERIAL>
-# 完全离线识别截图，不连接设备
-uv run babanongchang games --nlgj --screenshot image.png --ocr
 ```
 
 实现迁自 `nuolegejian`，已包含在本项目中。默认使用 `safe` 模式，每次确认箭头离场及剩余棋盘后再继续，最多通关 3 次或运行 15 分钟。`--levels 0 --max-minutes 30` 可只按时间运行；`--target 100` 表示完成第 100 关或更高关卡后停止，覆盖通关次数和总时间限制。全部参数见 `uv run babanongchang games --nlgj --help`。
@@ -107,7 +105,7 @@ uv run babanongchang games --nlgj --screenshot image.png --ocr
 
 APK 已接入全部 CLI 业务入口：支付宝连续施肥、逛农货、任务池、淘宝完整流程及挪了个箭。手机端直接复用 Python 自动化逻辑，通过无障碍服务完成本机操作，无需连接电脑或 ADB。
 
-应用中选择功能并在对应设置页调整参数；支持日志、挪了个箭离线截图识别和诊断导出。构建、使用及真机验收限制见 [Android 说明](android/README.md)。
+应用中选择功能并在对应设置页调整参数；支持运行记录和诊断导出。构建、使用及真机验收限制见 [Android 说明](android/README.md)。
 
 ## 环境
 

@@ -23,29 +23,11 @@ from babanongchang.nlgj.verification import arrow_has_left, heart_count, heart_l
 
 
 def play(
-    options: GameOptions, *, device: GameDevice | None, reader: GameReader,
+    options: GameOptions, *, device: GameDevice, reader: GameReader,
     clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = print,
 ) -> None:
     out = options.output
     out.mkdir(parents=True, exist_ok=True)
-    if options.screenshot:
-        image = cv2.imread(str(options.screenshot))
-        if image is None:
-            raise RuntimeError("Cannot read --screenshot")
-        board = recognize(image, options.board_top, options.board_bottom)
-        cv2.imwrite(str(out / "annotated.png"), annotate(board))
-        data = report(board)
-        if options.ocr:
-            data["ocr"] = reader.read(board.image)
-            data["popup_action"] = popup_action(board.image, data["ocr"])
-            data["streak_action"] = streak_action(board.image, data["ocr"], options.streak_policy)
-            data["revive_action"] = revive_action(board.image, data["ocr"]) if options.revive_ads else None
-        (out / "report.json").write_text(json.dumps(data, indent=2, ensure_ascii=False))
-        log(json.dumps(data, ensure_ascii=False))
-        return
-
-    if device is None:
-        raise ValueError("Online recognition requires a device")
     deadline = clock.monotonic() + options.max_minutes * 60
     events = (out / "events.jsonl").open("a", buffering=1)
 

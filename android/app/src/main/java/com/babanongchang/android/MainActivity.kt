@@ -133,12 +133,6 @@ class MainActivity : Activity() {
         }
         layout.addView(advanced)
         button(advanced, "管理无障碍服务") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        button(advanced, "导入挪了个箭截图") {
-            startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                type = "image/*"
-                addCategory(Intent.CATEGORY_OPENABLE)
-            }, 1)
-        }
         button(advanced, "导出运行记录与诊断") {
             if (FarmAccessibilityService.connected?.cliRun?.busy == true) status.text = "请先结束运行，再导出完整诊断。"
             else startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
@@ -169,36 +163,21 @@ class MainActivity : Activity() {
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (resultCode != RESULT_OK) return
+        if (requestCode != 2 || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         Thread {
             val result = runCatching {
-                if (requestCode == 1) {
-                    val target = File(filesDir, "offline-board.png")
-                    contentResolver.openInputStream(uri).use { input ->
-                        checkNotNull(input)
-                        target.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    runOnUiThread {
-                        selectFeature(6)
-                        getSharedPreferences("cli", MODE_PRIVATE).edit()
-                            .putString(FeatureSettings.key(6, "screenshot"), target.absolutePath)
-                            .putBoolean(FeatureSettings.key(6, "offline"), true).apply()
-                        status.text = "截图已导入，点击开启小白球并从面板开始；离线识别不会操作目标应用"
-                    }
-                } else if (requestCode == 2) {
-                    val directory = File(filesDir, "cli-output")
-                    contentResolver.openOutputStream(uri).use { stream ->
-                        ZipOutputStream(checkNotNull(stream)).use { zip ->
-                            directory.walkTopDown().filter { it.isFile }.forEach { file ->
-                                zip.putNextEntry(ZipEntry(file.relativeTo(directory).path))
-                                file.inputStream().use { it.copyTo(zip) }
-                                zip.closeEntry()
-                            }
+                val directory = File(filesDir, "cli-output")
+                contentResolver.openOutputStream(uri).use { stream ->
+                    ZipOutputStream(checkNotNull(stream)).use { zip ->
+                        directory.walkTopDown().filter { it.isFile }.forEach { file ->
+                            zip.putNextEntry(ZipEntry(file.relativeTo(directory).path))
+                            file.inputStream().use { it.copyTo(zip) }
+                            zip.closeEntry()
                         }
                     }
-                    runOnUiThread { status.text = "诊断已导出" }
                 }
+                runOnUiThread { status.text = "诊断已导出" }
             }
             result.exceptionOrNull()?.let { error -> runOnUiThread { status.text = "操作失败：${error.message}" } }
         }.start()

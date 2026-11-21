@@ -20,8 +20,6 @@ class GameOptions:
     board_bottom: float = .824
     output: Path = Path("artifacts/nlgj")
     dry_run: bool = False
-    screenshot: Path | None = None
-    ocr: bool = False
 
     def __post_init__(self) -> None:
         if not (0 <= self.board_top < self.board_bottom <= 1):

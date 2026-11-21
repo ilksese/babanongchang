@@ -60,8 +60,6 @@ NLGJ_FIELDS = (
     FieldSpec("board_bottom", "棋盘底部比例", f"{GameOptions.board_bottom:g}", minimum=0, maximum=1, advanced=True),
     FieldSpec("output", "输出目录", GameOptions.output.as_posix(), "directory", advanced=True),
     FieldSpec("dry_run", "仅查看设备，不点击", GameOptions.dry_run, "bool", advanced=True),
-    FieldSpec("screenshot", "离线截图", "", "file"),
-    FieldSpec("ocr", "离线报告包含 OCR", GameOptions.ocr, "bool", advanced=True),
     FieldSpec("adb", "ADB 命令或路径", "adb", "text", advanced=True),
 )
 
@@ -71,7 +69,7 @@ FEATURES = (
     FeatureSpec("goods", "逛农货", "浏览农货页面并领取奖励", (COMMON[1],)),
     FeatureSpec("tasks", "领取任务", "识别并完成支付宝农场任务", (COMMON[1],)),
     FeatureSpec("taobao", "淘宝农场", "执行淘宝芭芭农场流程"),
-    FeatureSpec("nlgj", "挪了个箭", "在线闯关，或离线分析一张截图", NLGJ_FIELDS),
+    FeatureSpec("nlgj", "挪了个箭", "识别设备上的棋盘并自动闯关", NLGJ_FIELDS),
 )
 FEATURE_BY_KEY = {feature.key: feature for feature in FEATURES}
 
@@ -98,15 +96,10 @@ def validate_settings(feature_key: str, values: Mapping[str, str | bool]) -> dic
     errors: dict[str, str] = {}
     feature = FEATURE_BY_KEY[feature_key]
     parsed: dict[str, int | float | None] = {}
-    screenshot = str(values.get("screenshot", "")).strip()
     target = str(values.get("target", "")).strip()
-    offline_fields = {"screenshot", "ocr", "output", "board_top", "board_bottom"}
     for field in feature.fields:
-        if feature_key == "nlgj":
-            if screenshot and field.key not in offline_fields and field.key != "dry_run":
-                continue
-            if target and field.key in ("levels", "max_minutes"):
-                continue
+        if feature_key == "nlgj" and target and field.key in ("levels", "max_minutes"):
+            continue
         if field.kind in ("int", "optional_int", "float"):
             try:
                 parsed[field.key] = _number(field, str(values.get(field.key, "")))
@@ -115,20 +108,10 @@ def validate_settings(feature_key: str, values: Mapping[str, str | bool]) -> dic
         elif field.kind == "choice" and values.get(field.key) not in field.options:
             errors[field.key] = f"{field.label}不是有效选项"
     if feature_key == "nlgj":
-        if screenshot and not Path(screenshot).is_file():
-            errors["screenshot"] = "离线截图文件不存在"
-        if not screenshot and bool(values.get("ocr")):
-            errors["ocr"] = "OCR 分析仅用于离线截图"
-        if screenshot and bool(values.get("dry_run")):
-            errors["dry_run"] = "离线截图与设备只读模式不能同时使用"
         top, bottom = parsed.get("board_top"), parsed.get("board_bottom")
         if top is not None and bottom is not None and top >= bottom:
             errors["board_bottom"] = "棋盘底部必须大于顶部"
     return errors
-
-
-def requires_device(feature_key: str, values: Mapping[str, str | bool]) -> bool:
-    return not (feature_key == "nlgj" and str(values.get("screenshot", "")).strip())
 
 
 def effective_parameters(
@@ -136,16 +119,11 @@ def effective_parameters(
     values: Mapping[str, str | bool],
 ) -> tuple[tuple[str, str], ...]:
     """Return the effective, user-facing settings after dependency rules."""
-    screenshot = str(values.get("screenshot", "")).strip()
     target = str(values.get("target", "")).strip()
-    offline_fields = {"screenshot", "ocr", "output", "board_top", "board_bottom"}
     parameters = []
     for field in FEATURE_BY_KEY[feature_key].fields:
-        if feature_key == "nlgj":
-            if screenshot and field.key not in offline_fields:
-                continue
-            if target and field.key in ("levels", "max_minutes"):
-                continue
+        if feature_key == "nlgj" and target and field.key in ("levels", "max_minutes"):
+            continue
         value = values.get(field.key, field.default)
         parameters.append((field.label, "是" if value is True else "否" if value is False else str(value)))
     return tuple(parameters)
@@ -159,23 +137,19 @@ def build_arguments(
     errors = validate_settings(feature_key, values)
     if errors:
         raise ValueError(next(iter(errors.values())))
-    if requires_device(feature_key, values) and not serial:
+    if not serial:
         raise ValueError("请选择一台已授权设备")
     args = ["games"] if feature_key == "nlgj" else [feature_key]
     if feature_key == "nlgj":
         args.append("--nlgj")
-    if serial and requires_device(feature_key, values):
-        args.extend(("--serial", serial))
+    args.extend(("--serial", serial))
 
     fields = FEATURE_BY_KEY[feature_key].fields
-    screenshot = str(values.get("screenshot", "")).strip()
+    target = str(values.get("target", "")).strip()
     for field in fields:
         value = values.get(field.key, field.default)
-        if feature_key == "nlgj":
-            if screenshot and field.key not in ("screenshot", "ocr", "output", "board_top", "board_bottom"):
-                continue
-            if values.get("target") and field.key in ("levels", "max_minutes"):
-                continue
+        if feature_key == "nlgj" and target and field.key in ("levels", "max_minutes"):
+            continue
         flag = "--" + field.key.replace("_", "-")
         if field.kind == "bool":
             if field.key == "revive_ads" and not value:

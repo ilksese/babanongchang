@@ -34,7 +34,7 @@ def main(argv: Sequence[str] | None = None) -> None:
 
         game = game_options(parser, args)
         try:
-            device = None if game.screenshot else AdbGameDevice(args.serial, args.adb, clock=clock)
+            device = AdbGameDevice(args.serial, args.adb, clock=clock)
             play(game, device=device, reader=ScreenReader(), clock=clock,
                  log=lambda text: print(text, flush=True))
         except KeyboardInterrupt:
