@@ -26,8 +26,8 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
                         help="Disable prioritizing video-ad revival over restart")
     group.add_argument("--ad-timeout", type=float, default=180,
                         help="Maximum wait for rewarded-ad entry/return; fixed browsing takes 33 seconds")
-    group.add_argument("--board-top", type=float, default=.165)
-    group.add_argument("--board-bottom", type=float, default=.83)
+    group.add_argument("--board-top", type=float, default=.146)
+    group.add_argument("--board-bottom", type=float, default=.824)
     group.add_argument("--output", type=Path, default=Path("artifacts/nlgj"))
     group.add_argument("--dry-run", action="store_true", help="Inspect the current device without tapping")
     group.add_argument("--screenshot", type=Path, help="Offline recognition; no device actions")

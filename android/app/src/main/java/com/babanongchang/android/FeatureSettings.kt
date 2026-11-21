@@ -23,8 +23,8 @@ object FeatureSettings {
             Number("idle-timeout", "页面等待时限（秒）", "35", 0.01, decimal = true),
             Number("max-restarts", "最多重开次数（消耗体力，0 禁止）", "0"),
             Number("ad-timeout", "复活广告等待时限（秒）", "180", 0.01, decimal = true),
-            Number("board-top", "棋盘顶部位置（屏幕高度比例）", "0.165", 0.0, 1.0, true),
-            Number("board-bottom", "棋盘底部位置（屏幕高度比例）", "0.83", 0.0, 1.0, true))
+            Number("board-top", "棋盘顶部位置（屏幕高度比例）", "0.146", 0.0, 1.0, true),
+            Number("board-bottom", "棋盘底部位置（屏幕高度比例）", "0.824", 0.0, 1.0, true))
         else -> emptyList()
     }
     fun configurable(index: Int) = index in 0..4 || index == 6

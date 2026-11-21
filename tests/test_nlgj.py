@@ -114,6 +114,14 @@ class NlgjRecognitionTest(unittest.TestCase):
         self.assertFalse(board.valid)
         self.assertIn("dimmed/covered", board.reason)
 
+    def test_default_crop_includes_arrows_near_the_canvas_top(self):
+        image = np.full((1600, 720, 3), 255, np.uint8)
+        head = head_template() > 0
+        image[250:250 + head.shape[0], 300:300 + head.shape[1]][head] = (60, 40, 20)
+        board = recognize(image)
+        self.assertTrue(board.valid, board.reason)
+        self.assertEqual(len(board.arrows), 1)
+
 
 class NlgjOcrTest(unittest.TestCase):
     def test_converts_project_rapidocr_result(self):

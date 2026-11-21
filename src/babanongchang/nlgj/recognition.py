@@ -62,7 +62,7 @@ def predict_removal(board: Board, label: int) -> Board:
                  reason="" if arrows else "No arrows", no_tap=board.no_tap)
 
 
-def recognize(image: np.ndarray, top: float = .165, bottom: float = .83) -> Board:
+def recognize(image: np.ndarray, top: float = .146, bottom: float = .824) -> Board:
     image = normalize(image)
     h, w = image.shape[:2]
     y0, y1 = round(h * top), round(h * bottom)

@@ -159,12 +159,6 @@ def is_taobao_recommended_video_page(items: Sequence[OcrText]) -> bool:
     )
 
 
-def is_taobao_coins_page(items: Sequence[OcrText]) -> bool:
-    return TextHandle.has_text(items, "淘金币", exact=True) and TextHandle.has_text(
-        items, "去赚金币", exact=True
-    )
-
-
 class TaobaoAutomation(FarmAutomation):
     """执行淘宝芭芭农场任务流程。"""
 
@@ -375,17 +369,11 @@ class TaobaoAutomation(FarmAutomation):
                 swipe_browse(self.adb, duration_seconds=18)
             elif task.operation is TaobaoTaskOperation.COINS_STAY:
                 print(f"开始执行“{task.name}”")
-                self.tap_and_wait(
-                    button.center,
-                    lambda current: (
-                        current if is_taobao_coins_page(current.items) else None
-                    ),
-                    timeout=20000,
-                    interval=500,
-                    error="点击“去淘金币”后未进入淘金币页面",
-                )
-                print("淘金币页面停留 5 秒")
-                time.sleep(5)
+                self.adb.tap(button.center)
+                print("已点击“去淘金币”，等待 3 秒自动跳转")
+                time.sleep(3)
+                print("淘金币页面停留 8 秒")
+                time.sleep(8)
             elif task.operation is TaobaoTaskOperation.STAY:
                 print("开始执行“看严选推荐商品”")
                 self.tap_and_wait(
