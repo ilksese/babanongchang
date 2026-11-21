@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import queue
@@ -236,6 +237,101 @@ def resolve_nlgj_output(output: str | None) -> str:
 
 
 @dataclass
+class NlgjProgress:
+    mode: str
+    goal: int
+    level: int | None = None
+    completed: int = 0
+    stopped: bool = False
+    stop_reason: str = ""
+
+
+def nlgj_progress_from_values(values: Mapping[str, str | bool]) -> NlgjProgress:
+    target = str(values.get("target", "")).strip()
+    if target:
+        return NlgjProgress("target", int(target))
+    levels = str(values.get("levels", "")).strip()
+    return NlgjProgress("levels", int(levels) if levels else 0)
+
+
+def observe_nlgj_log(progress: NlgjProgress, text: str) -> bool:
+    changed = False
+    for line in text.splitlines():
+        payload = _json_object(line)
+        if payload is None:
+            continue
+        event = payload.get("event")
+        if event in {"level", "revived", "completed"}:
+            level = payload.get("level")
+            if _count(level) and progress.level != level:
+                progress.level = level
+                changed = True
+        if event == "completed":
+            completed = payload.get("completed")
+            if _count(completed, minimum=0) and progress.completed != completed:
+                progress.completed = completed
+                changed = True
+        if event == "stop":
+            reason = str(payload.get("reason") or "")
+            if not progress.stopped or progress.stop_reason != reason:
+                progress.stopped = True
+                progress.stop_reason = reason
+                changed = True
+    return changed
+
+
+def progress_ratio(progress: NlgjProgress) -> tuple[int, int] | None:
+    if progress.goal <= 0:
+        return None
+    current = progress.level if progress.mode == "target" else progress.completed
+    return min(0 if current is None else current, progress.goal), progress.goal
+
+
+def progress_text(progress: NlgjProgress) -> str:
+    place = "等待识别关卡" if progress.level is None else f"第 {progress.level} 关"
+    if progress.mode == "target" and progress.goal > 0:
+        detail = f"{place} / 目标 {progress.goal}"
+    elif progress.goal > 0:
+        detail = f"{place} · 已通关 {progress.completed}/{progress.goal}"
+    else:
+        detail = place
+    if not progress.stopped:
+        return detail
+    if _timeout_reason(progress.stop_reason):
+        prefix = "超时停止"
+    elif _goal_reached(progress):
+        prefix = "已完成"
+    else:
+        prefix = "已停止"
+    return f"{prefix} · {detail}"
+
+
+def _json_object(line: str) -> dict[str, object] | None:
+    text = line.strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _count(value: object, minimum: int = 1) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
+
+
+def _timeout_reason(reason: str) -> bool:
+    lowered = reason.lower()
+    return "time limit" in lowered or "timeout" in lowered
+
+
+def _goal_reached(progress: NlgjProgress) -> bool:
+    ratio = progress_ratio(progress)
+    return ratio is not None and ratio[0] >= ratio[1]
+
+
+@dataclass
 class DeviceRun:
     feature_key: str
     feature_title: str
@@ -256,6 +352,7 @@ class DeviceBoard:
         self.runs: dict[str, DeviceRun] = {}
         self.logs: dict[str, str] = {}
         self.results: dict[str, tuple[str, str]] = {}
+        self.progress: dict[str, NlgjProgress] = {}
         self.selected: str | None = None
 
     def apply_devices(self, devices: tuple[AdbDevice, ...]) -> None:
@@ -280,6 +377,9 @@ class DeviceBoard:
         for serial in list(self.results):
             if serial not in kept:
                 del self.results[serial]
+        for serial in list(self.progress):
+            if serial not in kept:
+                del self.progress[serial]
         if self.selected not in kept:
             self.selected = None
         self.order = tuple(visible)
@@ -310,7 +410,14 @@ class DeviceBoard:
                 return "另一台正在把挪了个箭写入同一输出目录，请改输出目录。"
         return None
 
-    def begin(self, serial: str, feature_key: str, feature_title: str, output: str | None) -> None:
+    def begin(
+        self,
+        serial: str,
+        feature_key: str,
+        feature_title: str,
+        output: str | None,
+        progress: NlgjProgress | None = None,
+    ) -> None:
         device = self.devices.get(serial)
         self.runs[serial] = DeviceRun(
             feature_key=feature_key,
@@ -322,11 +429,19 @@ class DeviceBoard:
         )
         self.logs[serial] = ""
         self.results.pop(serial, None)
+        if progress is None:
+            self.progress.pop(serial, None)
+        else:
+            self.progress[serial] = progress
 
-    def append_log(self, serial: str, text: str) -> None:
+    def append_log(self, serial: str, text: str) -> bool:
         if serial not in self.logs and serial not in self.runs:
-            return
+            return False
         self.logs[serial] = self.logs.get(serial, "") + text
+        current = self.progress.get(serial)
+        if current is None:
+            return False
+        return observe_nlgj_log(current, text)
 
     def request_stop(self, serial: str) -> None:
         run = self.runs[serial]
@@ -335,6 +450,9 @@ class DeviceBoard:
         run.status_detail = "已请求安全停止；正在等待当前设备操作结束…"
 
     def finish(self, serial: str, *, code: int, stopped: bool, forced: bool) -> None:
+        progress = self.progress.get(serial)
+        if progress is not None and not progress.stopped:
+            progress.stopped = True
         if forced:
             title, detail = "被强制终止", "最后一次设备操作结果可能未确认"
         elif stopped:
@@ -343,10 +461,17 @@ class DeviceBoard:
             title, detail = "已完成", "流程正常结束；业务结果请以日志为准"
         else:
             title, detail = "运行失败", f"子进程退出码：{code}"
+        if progress is not None and progress.level is not None and not _goal_reached(progress):
+            stuck = f"停在第 {progress.level} 关"
+            if _timeout_reason(progress.stop_reason):
+                title, detail = "超时停止", stuck
+            else:
+                detail = f"{detail}；{stuck}"
         self.runs.pop(serial, None)
         if serial not in self.devices:
             self.logs.pop(serial, None)
             self.results.pop(serial, None)
+            self.progress.pop(serial, None)
             self.order = tuple(item for item in self.order if item != serial)
             if self.selected == serial:
                 self.selected = None
@@ -403,6 +528,9 @@ class DeviceBoard:
         text = f"{serial} · {model or '未知型号'} · {state}"
         if result:
             text += f" · {result}"
+        progress = self.progress.get(serial)
+        if progress is not None and progress.level is not None:
+            text += f" · 第 {progress.level} 关"
         return text
 
 

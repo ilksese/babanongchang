@@ -13,6 +13,9 @@ from babanongchang.app_core import (
     defaults_for,
     effective_parameters,
     FEATURE_BY_KEY,
+    nlgj_progress_from_values,
+    progress_ratio,
+    progress_text,
     save_ocr_config,
     validate_settings,
 )
@@ -303,6 +306,62 @@ class DeviceBoardTest(unittest.TestCase):
         self.assertIn("未授权", board.row_text("B"))
         board.finish("missing", code=0, stopped=False, forced=True)
         self.assertEqual(board.order, ("A", "B"))
+
+
+class NlgjProgressTest(unittest.TestCase):
+    def test_target_progress_uses_current_level(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A", model="Pixel"),))
+        board.begin("A", "nlgj", "挪了个箭", None, nlgj_progress_from_values({"target": "100", "levels": "bad"}))
+        changed = board.append_log("A", '{"event": "level", "level": 50, "arrows": 3}\n')
+        progress = board.progress["A"]
+        self.assertTrue(changed)
+        self.assertEqual(progress_text(progress), "第 50 关 / 目标 100")
+        self.assertEqual(progress_ratio(progress), (50, 100))
+        self.assertIn("第 50 关", board.row_text("A"))
+        board.select("A")
+        board.append_log("A", '{"event": "stop", "reason": "Time limit reached"}\n')
+        board.finish("A", code=0, stopped=False, forced=False)
+        self.assertEqual(progress_text(board.progress["A"]), "超时停止 · 第 50 关 / 目标 100")
+        self.assertEqual(progress_ratio(board.progress["A"]), (50, 100))
+        self.assertEqual(board.header(), ("超时停止", "停在第 50 关"))
+
+    def test_levels_progress_counts_wins_and_keeps_level(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A"),))
+        board.begin("A", "nlgj", "挪了个箭", None, nlgj_progress_from_values({"target": "  ", "levels": "3"}))
+        board.append_log("A", "不是进度\n{not json}\n")
+        board.append_log("A", '{"event": "completed", "level": 12, "completed": 1}\n')
+        progress = board.progress["A"]
+        self.assertEqual(progress_text(progress), "第 12 关 · 已通关 1/3")
+        self.assertEqual(progress_ratio(progress), (1, 3))
+
+    def test_timeout_stop_keeps_progress(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A"),))
+        board.select("A")
+        board.begin("A", "nlgj", "挪了个箭", None, nlgj_progress_from_values({"target": "", "levels": "3"}))
+        board.append_log("A", '{"event": "level", "level": 50}\n')
+        board.append_log("A", '{"event": "stop", "reason": "Time limit reached"}\n')
+        board.finish("A", code=0, stopped=False, forced=False)
+        progress = board.progress["A"]
+        self.assertTrue(progress.stopped)
+        self.assertEqual(progress_text(progress), "超时停止 · 第 50 关 · 已通关 0/3")
+        self.assertEqual(board.header(), ("超时停止", "停在第 50 关"))
+        self.assertIn("第 50 关", board.row_text("A"))
+
+    def test_new_job_clears_previous_progress(self) -> None:
+        board = DeviceBoard()
+        board.apply_devices((_device("A"), _device("B")))
+        board.begin("A", "nlgj", "挪了个箭", None, nlgj_progress_from_values({"levels": "0"}))
+        board.append_log("A", '{"event": "revived", "level": 4}\n')
+        board.finish("A", code=1, stopped=False, forced=False)
+        self.assertEqual(progress_text(board.progress["A"]), "已停止 · 第 4 关")
+        self.assertIsNone(progress_ratio(board.progress["A"]))
+        board.begin("A", "fertilize", "施肥", None)
+        self.assertNotIn("A", board.progress)
+        board.apply_devices((_device("B"),))
+        self.assertNotIn("A", board.progress)
 
 
 if __name__ == "__main__":

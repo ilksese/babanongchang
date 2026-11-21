@@ -19,6 +19,9 @@ from babanongchang.app_core import (
     build_arguments,
     defaults_for,
     effective_parameters,
+    nlgj_progress_from_values,
+    progress_ratio,
+    progress_text,
     save_ocr_config,
     validate_settings,
 )
@@ -104,6 +107,24 @@ class FarmApp:
         style.configure("Stop.TButton", padding=(18, 10), background="#EADBD8", foreground=self.DANGER)
         style.configure("TEntry", padding=6)
         style.configure("TCombobox", padding=5)
+        style.configure(
+            "Game.Horizontal.TProgressbar",
+            troughcolor="#E4EBE6",
+            background=self.GREEN,
+            bordercolor=self.LINE,
+            lightcolor=self.GREEN,
+            darkcolor=self.GREEN,
+            thickness=14,
+        )
+        style.configure(
+            "Stopped.Horizontal.TProgressbar",
+            troughcolor="#E4EBE6",
+            background=self.RICE,
+            bordercolor=self.LINE,
+            lightcolor=self.RICE,
+            darkcolor=self.RICE,
+            thickness=14,
+        )
 
     def _set_window_icon(self) -> None:
         try:
@@ -206,14 +227,22 @@ class FarmApp:
         log_panel = ttk.Frame(work, style="Panel.TFrame", padding=(14, 10))
         log_panel.grid(row=3, column=0, sticky="nsew")
         log_panel.columnconfigure(0, weight=1)
-        log_panel.rowconfigure(1, weight=1)
+        log_panel.rowconfigure(2, weight=1)
+        self.progress_frame = ttk.Frame(log_panel, style="Panel.TFrame")
+        self.progress_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        self.progress_frame.columnconfigure(0, weight=1)
+        self.progress_label = ttk.Label(self.progress_frame, style="Panel.TLabel", font=("Microsoft YaHei UI", 12, "bold"))
+        self.progress_label.grid(row=0, column=0, sticky="w")
+        self.progress_bar = ttk.Progressbar(self.progress_frame, style="Game.Horizontal.TProgressbar", mode="determinate")
+        self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        self.progress_frame.grid_remove()
         self.log_title = ttk.Label(log_panel, text="本次运行日志", style="Panel.TLabel", font=("Microsoft YaHei UI", 11, "bold"))
-        self.log_title.grid(row=0, column=0, sticky="w", pady=(0, 7))
-        ttk.Button(log_panel, text="复制日志", command=self._copy_log).grid(row=0, column=1, sticky="e")
+        self.log_title.grid(row=1, column=0, sticky="w", pady=(0, 7))
+        ttk.Button(log_panel, text="复制日志", command=self._copy_log).grid(row=1, column=1, sticky="e")
         self.log = tk.Text(log_panel, height=9, wrap="word", bg="#17251F", fg="#E7EFEA", insertbackground="white", relief="flat", padx=12, pady=10, font=("Consolas", 9), state="disabled")
-        self.log.grid(row=1, column=0, sticky="nsew")
+        self.log.grid(row=2, column=0, sticky="nsew")
         log_scroll = ttk.Scrollbar(log_panel, orient="vertical", command=self.log.yview)
-        log_scroll.grid(row=1, column=1, sticky="ns")
+        log_scroll.grid(row=2, column=1, sticky="ns")
         self.log.configure(yscrollcommand=log_scroll.set)
 
     def _select_feature(self, key: str) -> None:
@@ -404,9 +433,10 @@ class FarmApp:
         runner = TaskProcess(source)
         runner.start(arguments, self.cwd)
         feature = FEATURE_BY_KEY[self.feature_key]
+        progress = nlgj_progress_from_values(self.session_values[self.feature_key]) if self.feature_key == "nlgj" else None
         self.runners[serial] = runner
         self.forced.discard(serial)
-        self.board.begin(serial, self.feature_key, feature.title, output)
+        self.board.begin(serial, self.feature_key, feature.title, output, progress)
         self.board.append_log(serial, command)
         threading.Thread(target=self._bridge, args=(serial, source), name=f"app-cli-{serial}", daemon=True).start()
         self._render_devices()
@@ -470,10 +500,13 @@ class FarmApp:
                 if kind == "log":
                     serial, text = payload
                     text = str(text)
-                    self.board.append_log(serial, text)
+                    changed = self.board.append_log(serial, text)
                     if self.board.selected == serial:
                         self._insert_log(text)
-                    print(f"[{serial}] {text}", end="" if text.endswith("\n") else "\n", flush=True)
+                        if changed:
+                            self._render_progress()
+                    if changed:
+                        self._render_devices()
                 elif kind == "exit":
                     serial, code, stopped = payload
                     self._handle_exit(serial, code, stopped)
@@ -522,6 +555,27 @@ class FarmApp:
             self.log.insert("end", self.board.logs.get(serial, ""))
             self.log.see("end")
         self.log.configure(state="disabled")
+        self._render_progress()
+
+    def _render_progress(self) -> None:
+        serial = self.board.selected
+        progress = self.board.progress.get(serial) if serial else None
+        if progress is None:
+            self.progress_frame.grid_remove()
+            return
+        self.progress_frame.grid()
+        self.progress_label.configure(text=progress_text(progress))
+        ratio = progress_ratio(progress)
+        if ratio is None:
+            self.progress_bar.grid_remove()
+            return
+        current, goal = ratio
+        self.progress_bar.configure(
+            style="Stopped.Horizontal.TProgressbar" if progress.stopped else "Game.Horizontal.TProgressbar",
+            maximum=goal,
+        )
+        self.progress_bar.configure(value=current)
+        self.progress_bar.grid()
 
     def _insert_log(self, text: str) -> None:
         self.log.configure(state="normal")
