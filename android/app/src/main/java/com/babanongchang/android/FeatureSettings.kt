@@ -15,7 +15,7 @@ object FeatureSettings {
         0 -> listOf(threshold, clicks, browse)
         1 -> listOf(threshold, clicks)
         2, 3 -> listOf(browse)
-        6 -> listOf(
+        5 -> listOf(
             Number("target", "目标关卡（留空不指定）", "", 1.0, optional = true),
             Number("levels", "通关次数（0 表示仅按时限停止）", "3"),
             Number("max-minutes", "最长运行时间（分钟）", "15", 0.01, decimal = true),
@@ -27,7 +27,7 @@ object FeatureSettings {
             Number("board-bottom", "棋盘底部位置（屏幕高度比例）", "0.824", 0.0, 1.0, true))
         else -> emptyList()
     }
-    fun configurable(index: Int) = index in 0..4 || index == 6
+    fun configurable(index: Int) = index in 0..5
     fun key(index: Int, field: String) = "feature_${index}_$field"
     fun value(preferences: SharedPreferences, index: Int, field: Number): String =
         preferences.getString(key(index, field.key), field.default).orEmpty().takeIf(field::valid) ?: field.default
@@ -38,7 +38,7 @@ object FeatureSettings {
             val saved = preferences.getString(key(index, field.key), null)
             if (saved != null && saved.isNotBlank() && field.valid(saved)) args += "--${field.key} $saved"
         }
-        if (index == 6) {
+        if (index == 5) {
             val mode = preferences.getString(key(index, "mode"), null)
             val streak = preferences.getString(key(index, "streak-policy"), null)
             if (mode == "safe" || mode == "fast") args += "--mode $mode"

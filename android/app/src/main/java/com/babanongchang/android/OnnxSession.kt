@@ -19,6 +19,15 @@ class OnnxSession(path: String) : AutoCloseable {
     fun inputName(): String = session.inputNames.single()
     fun outputName(): String = session.outputNames.first()
     fun metadata(): String = JSONObject(session.metadata.customMetadata).toString()
+    fun customMetadata(key: String): String? = session.metadata.customMetadata[key]
+
+    fun runFloats(values: FloatArray, shape: LongArray): Pair<FloatArray, LongArray> {
+        val bytes = ByteBuffer.allocate(values.size * 4).order(ByteOrder.LITTLE_ENDIAN)
+        bytes.asFloatBuffer().put(values)
+        val output = run(bytes.array(), shape)
+        val floats = ByteBuffer.wrap(output.data).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
+        return FloatArray(floats.remaining()).also { floats.get(it) } to output.shape
+    }
 
     class Output(val data: ByteArray, val shape: LongArray)
 

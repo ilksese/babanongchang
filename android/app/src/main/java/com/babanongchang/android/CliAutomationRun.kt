@@ -58,11 +58,10 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
                     history.append(checkNotNull(record).id, text)
                     File(outputDirectory, "cli.log").appendText(text)
                 }
-                val python = CliPython.get(service).getModule("babanongchang.android")
                 if (taobaoConfidence == null) {
-                    python.callAttr("run", bridge, module, options, outputDirectory.absolutePath)
+                    runNative(service, bridge, module, options, outputDirectory)
                 } else {
-                    python.callAttr("run", bridge, module, options, outputDirectory.absolutePath, taobaoConfidence)
+                    runNative(service, bridge, module, options, outputDirectory, taobaoConfidence)
                 }
             } catch (error: Exception) {
                 result = "已停止：${error.message ?: error.javaClass.simpleName}"

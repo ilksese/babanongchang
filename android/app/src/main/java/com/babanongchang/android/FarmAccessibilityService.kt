@@ -495,8 +495,7 @@ class FarmAccessibilityService : AccessibilityService(), SingleFertilizationPlat
                                 check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
                                 output.toByteArray()
                             }
-                            val lines = org.json.JSONArray(CliPython.get(this@FarmAccessibilityService)
-                                .getModule("babanongchang.android").callAttr("recognize_png", png).toString())
+                            val lines = org.json.JSONArray(NativeRuntime.recognizeJson(this@FarmAccessibilityService, png))
                             OcrFrame(bitmap.width, bitmap.height, (0 until lines.length()).map { index ->
                                 val line = lines.getJSONArray(index)
                                 val box = line.getJSONArray(1)

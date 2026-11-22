@@ -2,7 +2,7 @@ from __future__ import annotations
 
 try:
     import tomllib
-except ModuleNotFoundError:  # Android's OpenCV wheels currently require Python 3.10.
+except ModuleNotFoundError:  # Python older than 3.11 has no tomllib.
     import tomli as tomllib
 from dataclasses import dataclass
 from pathlib import Path

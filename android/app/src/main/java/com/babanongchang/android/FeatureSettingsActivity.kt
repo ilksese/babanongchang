@@ -54,13 +54,13 @@ class FeatureSettingsActivity : Activity() {
                 saved.text = "已自动保存，下次运行生效。"
             } }
         }
-        if (index == 6) {
+        if (index == 5) {
             choices(card("运行模式"), "mode", listOf("safe" to "安全模式 · 每步识别确认", "fast" to "快速模式 · 按分析顺序连续点击"), "safe")
         }
         val fields = FeatureSettings.numbers(index)
         if (fields.isNotEmpty()) {
-            val settings = card(if (index == 6) "关卡与运行限制" else "运行设置")
-            if (index == 6) settings.addView(FarmUi.text(this, "设置目标关卡后，完成该关或更高关卡才停止，通关次数和最长运行时间不再作为停止条件。", 14f))
+            val settings = card(if (index == 5) "关卡与运行限制" else "运行设置")
+            if (index == 5) settings.addView(FarmUi.text(this, "设置目标关卡后，完成该关或更高关卡才停止，通关次数和最长运行时间不再作为停止条件。", 14f))
             val inputs = mutableMapOf<String, EditText>()
             fields.forEach { field ->
                 val label = FarmUi.text(this, field.title)
@@ -86,7 +86,7 @@ class FeatureSettingsActivity : Activity() {
                     input.error = if (ok) null else "请输入有效数值（${field.min}～${field.max}）"
                     if (!ok) valid = false
                 }
-                if (index == 6) {
+                if (index == 5) {
                     val top = inputs.getValue("board-top").text.toString().toDoubleOrNull()
                     val bottom = inputs.getValue("board-bottom").text.toString().toDoubleOrNull()
                     if (top != null && bottom != null && top >= bottom) {
@@ -106,7 +106,7 @@ class FeatureSettingsActivity : Activity() {
                 override fun afterTextChanged(s: Editable?) = save()
             }) }
         }
-        if (index == 6) {
+        if (index == 5) {
             val strategy = card("复活与连胜")
             toggle(strategy, "revive-ads", "允许观看广告复活", true)
             choices(strategy, "streak-policy", listOf("coins-or-abandon" to "连胜：金币足够则使用，否则放弃", "stop" to "连胜：遇到需要金币时停止"), "coins-or-abandon")

@@ -28,7 +28,6 @@ def prepare(destination):
         shutil.copyfile(source, target)
         manifest[name] = hashlib.sha256(target.read_bytes()).hexdigest()
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    (destination / "__init__.py").touch()
 
 
 if __name__ == "__main__":
