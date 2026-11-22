@@ -53,10 +53,11 @@ fun runNative(
     options: String,
     outputDir: File,
     taobaoMinScore: Double = FarmOptions().taobaoMinScore,
+    recordLogs: Boolean = false,
 ) {
     val request = parseRun(module, options, taobaoMinScore)
     val clock = BridgeClock(bridge)
-    val log = { text: String -> bridge.log(text + "\n") }
+    val log: (String) -> Unit = if (recordLogs) ({ text -> bridge.log(text + "\n") }) else ({ _ -> })
     try {
         when (request) {
             is RunRequest.Game -> {
@@ -64,7 +65,7 @@ fun runNative(
                 else if (request.options.output.isAbsolute) request.options.output
                 else File(outputDir, request.options.output.path)
                 playGame(request.options.copy(output = output), BridgeGameDevice(bridge),
-                    NativeGameReader(NativeRuntime.ocr(context)), clock, log)
+                    NativeGameReader(NativeRuntime.ocr(context)), clock, log, recordLogs)
             }
             is RunRequest.Farm -> {
                 outputDir.mkdirs()

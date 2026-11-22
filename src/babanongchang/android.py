@@ -12,6 +12,7 @@ from babanongchang.adapters.android import AndroidClock, AndroidDevice, AndroidG
 from babanongchang.arguments import build_parser, farm_options, game_options, parse_arguments
 from babanongchang.config import CONFIG_FILE_NAME, load_project_config
 from babanongchang.automation.handle import AutomationError
+from babanongchang.logs import silent_log
 from babanongchang.nlgj.options import GameOptions
 from babanongchang.workflow import FarmOptions, run_farm
 
@@ -28,7 +29,8 @@ def run(bridge, module, options, output_dir, taobao_min_score=FarmOptions.taobao
     clock = AndroidClock(bridge)
 
     def log(text: str) -> None:
-        bridge.log(text + "\n")
+        if args.debug:
+            bridge.log(text + "\n")
 
     device = AndroidDevice(bridge)
     try:
@@ -41,11 +43,15 @@ def run(bridge, module, options, output_dir, taobao_min_score=FarmOptions.taobao
                 output=root if game.output == GameOptions.output else root / game.output,
             )
             play(game, device=AndroidGameDevice(device),
-                 reader=AndroidScreenReader(device.ocr), clock=clock, log=log)
+                 reader=AndroidScreenReader(device.ocr), clock=clock,
+                 log=log if args.debug else silent_log, record_events=args.debug)
         else:
             root.mkdir(parents=True, exist_ok=True)
             config = load_project_config(root / CONFIG_FILE_NAME)
-            run_farm(args.module, farm, device=device, ocr=device.ocr, config=config, clock=clock, log=log)
+            run_farm(
+                args.module, farm, device=device, ocr=device.ocr, config=config,
+                clock=clock, log=log if args.debug else silent_log,
+            )
     except AutomationError as exc:
         raise RuntimeError(f"自动化已安全停止：{exc}") from exc
     finally:

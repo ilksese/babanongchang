@@ -10,6 +10,7 @@ from babanongchang.farm.alipay.flow import (
 from babanongchang.farm.device import FarmDevice
 from babanongchang.farm.taobao.flow import TaobaoAutomation
 from babanongchang.automation.handle import OcrEngine, TextHandle
+from babanongchang.logs import silent_log
 from babanongchang.runtime import Clock, SYSTEM_CLOCK
 
 
@@ -35,7 +36,7 @@ class FarmOptions:
 
 def run_farm(
     module: str, options: FarmOptions, *, device: FarmDevice, ocr: OcrEngine,
-    config: ProjectConfig, clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = print,
+    config: ProjectConfig, clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = silent_log,
 ) -> None:
     """运行指定农场功能；调用方管理设备、OCR 和取消时钟的生命周期。"""
     if module not in FARM_MODULES:

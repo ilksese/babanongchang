@@ -1,7 +1,6 @@
-import logging
-
 import numpy as np
 
+from babanongchang.logs import apply_library_logging
 from babanongchang.automation.handle import OcrResult
 
 
@@ -13,6 +12,6 @@ class DesktopOcr:
         if self.engine is None:
             from rapidocr import RapidOCR
 
-            logging.getLogger("RapidOCR").setLevel(logging.WARNING)
+            apply_library_logging()
             self.engine = RapidOCR()
         return self.engine(image)

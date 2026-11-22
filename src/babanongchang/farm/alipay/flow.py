@@ -8,6 +8,7 @@ import numpy as np
 
 from babanongchang.automation.browsing import swipe_browse
 from babanongchang.farm.device import FarmDevice
+from babanongchang.logs import silent_log
 from babanongchang.automation.handle import (
     AutomationError,
     OcrText,
@@ -140,7 +141,7 @@ def describe_recognized_tasks(
 class AlipayFlow:
     def __init__(
         self, device: FarmDevice, screen: TextHandle, browse_seconds: float = 18,
-        *, log: Callable[[str], None] = print,
+        *, log: Callable[[str], None] = silent_log,
     ) -> None:
         self.adb = device
         self.screen = screen
@@ -159,7 +160,7 @@ class AlipayFlow:
 class FarmAutomation(AlipayFlow):
     def __init__(
         self, device: FarmDevice, screen: TextHandle, threshold: int = 600,
-        browse_seconds: float = 18, *, log: Callable[[str], None] = print,
+        browse_seconds: float = 18, *, log: Callable[[str], None] = silent_log,
     ) -> None:
         super().__init__(device, screen, browse_seconds, log=log)
         self.threshold = threshold
@@ -542,7 +543,7 @@ class AlipayAutomation(AlipayFlow):
 
     def __init__(
         self, device: FarmDevice, screen: TextHandle, threshold: int = 600,
-        browse_seconds: float = 18, *, log: Callable[[str], None] = print,
+        browse_seconds: float = 18, *, log: Callable[[str], None] = silent_log,
     ) -> None:
         super().__init__(device, screen, browse_seconds, log=log)
         self.threshold = threshold

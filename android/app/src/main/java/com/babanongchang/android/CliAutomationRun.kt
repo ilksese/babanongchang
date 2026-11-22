@@ -26,6 +26,7 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         val taobaoConfidence = if (preferences.contains("taobao_confidence")) {
             preferences.getInt("taobao_confidence", 75).coerceIn(0, 100) / 100.0
         } else null
+        val recordLogs = preferences.getBoolean("log_enabled", false)
         try {
             service.keepTaskScreenOn(true)
         } catch (error: RuntimeException) {
@@ -41,7 +42,7 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
         message = "正在运行：$module $options"
         service.hideControls()
         Thread({
-            var result = "运行完成；详细结果见日志"
+            var result = if (recordLogs) "运行完成；详细结果见日志" else "运行完成"
             val history = RunHistory(File(outputDirectory, "runs"))
             var record: RunRecord? = null
             try {
@@ -50,25 +51,33 @@ class CliAutomationRun(private val service: FarmAccessibilityService) {
                     "games" -> 5
                     else -> FarmFeatures.titles.indices.firstOrNull { FarmFeatures.module(it) == module } ?: 0
                 }
-                record = history.create(FarmFeatures.titles[index], module, options)
-                activeRecordId = record.id
-                File(outputDirectory, "cli.log").writeText("")
+                if (recordLogs) {
+                    record = history.create(FarmFeatures.titles[index], module, options)
+                    activeRecordId = record.id
+                    File(outputDirectory, "cli.log").writeText("")
+                }
                 gate.checkpoint()
                 val bridge = CliAccessibilityBridge(service, gate) { text ->
-                    history.append(checkNotNull(record).id, text)
-                    File(outputDirectory, "cli.log").appendText(text)
+                    val saved = record
+                    if (recordLogs && saved != null) {
+                        history.append(saved.id, text)
+                        File(outputDirectory, "cli.log").appendText(text)
+                    }
                 }
                 if (taobaoConfidence == null) {
-                    runNative(service, bridge, module, options, outputDirectory)
+                    runNative(service, bridge, module, options, outputDirectory, recordLogs = recordLogs)
                 } else {
-                    runNative(service, bridge, module, options, outputDirectory, taobaoConfidence)
+                    runNative(service, bridge, module, options, outputDirectory, taobaoConfidence, recordLogs)
                 }
             } catch (error: Exception) {
                 result = "已停止：${error.message ?: error.javaClass.simpleName}"
             } finally {
                 gate.stop()
-                runCatching { File(outputDirectory, "cli.log").appendText("\n$result\n") }
-                val saved = runCatching { record?.let { history.finish(it.id, result) } }
+                val saved = if (recordLogs) runCatching {
+                    File(outputDirectory, "cli.log").appendText("\n$result\n")
+                    record?.let { history.finish(it.id, result) }
+                    Unit
+                } else Result.success(Unit)
                 saved.exceptionOrNull()?.let { result += "；运行记录保存失败：${it.message}" }
                 main.post {
                     activeRecordId = null

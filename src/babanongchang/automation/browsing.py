@@ -6,6 +6,7 @@ from typing import Callable, Iterable, Protocol
 import numpy as np
 
 from babanongchang.runtime import Clock, SYSTEM_CLOCK
+from babanongchang.logs import silent_log
 
 
 class SwipeDevice(Protocol):
@@ -25,7 +26,7 @@ def find_browse_iteration(texts: Iterable[str]) -> int | None:
 
 def swipe_browse(
     device: SwipeDevice, duration_seconds: float = 18, *,
-    clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = print,
+    clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = silent_log,
 ) -> None:
     """在当前页面上下往复滑动指定时间。"""
     if duration_seconds <= 0:

@@ -22,6 +22,7 @@
 
 - OCR 配置每次运行时读取：CLI 从工作目录加载 `babanongchang.toml`，APK 从应用私有目录 `files/cli-output/babanongchang.toml` 加载。业务流程使用传入的时钟等待，以保留 Android 暂停时间与桌面取消语义。
 - `babanongchang.toml`、`TextHandle` 和 `back_until` 的 timeout/interval 单位是毫秒。业务自动化方法的 `timeout`、`duration_seconds` 通常是秒，传给底层等待前要乘以 1000。
+- 各模块默认不打印、不写运行日志。CLI 只在 `--debug` 时打印并追加当前目录的 `babanongchang.log`；桌面和 APK 用“记录日志”开关控制，默认关闭，下次运行生效。挪了个箭的诊断截图和报告仍按输出目录保存，事件日志跟随上述开关。
 
 ## Agent skills
 

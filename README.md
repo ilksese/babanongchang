@@ -4,7 +4,7 @@
 
 ### 桌面程序
 
-`uv run build --windows` 生成单个可分发文件 `dist/babanongchang.exe`。把这一个文件交给对方即可运行，不需要安装 Python，也不占用终端。配置、输出和诊断文件写在该 exe 同目录。电脑上仍需安装 ADB，并保证能从系统 PATH 找到 `adb`。
+`uv run build --windows` 生成单个可分发文件 `dist/babanongchang.exe`。把这一个文件交给对方即可运行，不需要安装 Python，也不占用终端。配置和诊断文件写在该 exe 同目录。日志默认不写；桌面里的“记录日志”开关或命令行 `--debug` 才会把日志追加到同目录的 `babanongchang.log`。电脑上仍需安装 ADB，并保证能从系统 PATH 找到 `adb`。
 
 `build/` 不是第二个程序。它是 PyInstaller 分析依赖时留下的中间缓存，里面的同名 exe 缺少运行库，不能双击。成功打包后这个缓存会被清掉。首次双击某个版本会把运行时解压到本机用户目录，之后直接启动，并清掉其他版本留下的运行时。
 
@@ -18,7 +18,7 @@ uv run build --windows
 
 - 同时安装支付宝和淘宝：先执行支付宝，再执行淘宝。
 - 只安装支付宝或淘宝：只执行已安装应用的流程。
-- 两个都未安装：输出提示并结束，不启动任何应用。
+- 两个都未安装：直接结束，不启动任何应用。提示只在 `--debug` 时打印。
 - 每个应用完成后重新检查安装情况，只执行尚未完成的应用；如果先执行淘宝，完成后检测到支付宝，则继续执行支付宝。每个应用最多执行一轮，不循环往返。
 - 显式指定 `fertilize`、`goods`、`tasks` 或 `taobao` 时保持单模块运行，不自动串联另一个应用。
 
@@ -65,7 +65,7 @@ uv run babanongchang games --nlgj --mode fast --serial <ADB_SERIAL>
 
 失败时默认优先观看复活广告，确认固定 30 秒广告页后上下滑动 33 秒，再识别“奖励已发放”并关闭广告。默认不消耗体力重开；恢复连胜仅使用已确认足够的现有金币，余额不足则放弃，`--streak-policy stop` 可禁止此操作。遇到爱心减少、前台应用切换、未知弹窗或无法确认的棋盘时停止；按 `Ctrl+C` 可手动停止。
 
-适配白底深色直角折线箭头棋盘，特殊机关、严重重叠或裁切可能被拒绝操作。诊断截图、标注和日志默认写入已忽略的 `artifacts/nlgj/`，可通过 `--output` 修改。
+适配白底深色直角折线箭头棋盘，特殊机关、严重重叠或裁切可能被拒绝操作。诊断截图、标注和报告默认写入已忽略的 `artifacts/nlgj/`，可通过 `--output` 修改。事件日志只在 `--debug` 时写入。
 
 ### 施肥
 
@@ -200,7 +200,7 @@ recognition_timeout_ms = 10000
 - `screenshot_interval_ms`：等待 OCR 文案时连续截图的间隔，默认 200 毫秒。
 - `recognition_timeout_ms`：OCR 文案等待的默认超时，默认 10 秒。
 
-CLI 和 Android 都调用共享的 [`workflow.run_farm`](src/babanongchang/workflow.py) 或 [`nlgj.runner.play`](src/babanongchang/nlgj/runner.py)。`farm/alipay/` 和 `farm/taobao/` 各自维护页面与任务规则，`automation/` 提供公共识别和等待，`adapters/` 封装设备和 OCR。运行入口负责加载配置并传入本次运行的时钟与日志；桌面界面继续使用 CLI 子进程。
+CLI 和 Android 都调用共享的 [`workflow.run_farm`](src/babanongchang/workflow.py) 或 [`nlgj.runner.play`](src/babanongchang/nlgj/runner.py)。`farm/alipay/` 和 `farm/taobao/` 各自维护页面与任务规则，`automation/` 提供公共识别和等待，`adapters/` 封装设备和 OCR。运行入口负责加载配置并传入本次运行的时钟；只有 `--debug` 或界面日志开关打开时才传入日志。桌面界面继续使用 CLI 子进程。
 
 扫描任务列表时会逐屏输出命中的任务、操作类型和按钮状态，例如：
 

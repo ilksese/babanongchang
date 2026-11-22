@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -10,6 +11,7 @@ from unittest.mock import ANY, Mock, patch
 import numpy as np
 
 from babanongchang.cli import main
+from babanongchang.logs import DebugLog, silent_log
 from babanongchang.nlgj.fast import fast_sequence
 from babanongchang.nlgj.ocr import ScreenReader
 from babanongchang.nlgj.recognition import head_template, recognize
@@ -59,6 +61,25 @@ class NlgjIntegrationTest(unittest.TestCase):
         self.assertIs(play.call_args.kwargs["device"], device.return_value)
         self.assertEqual((args.mode, args.target), ("fast", 100))
         self.assertFalse(args.revive_ads)
+        self.assertIs(play.call_args.kwargs["log"], silent_log)
+        self.assertFalse(play.call_args.kwargs["record_events"])
+
+    def test_debug_requests_event_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            previous = os.getcwd()
+            os.chdir(directory)
+            try:
+                with (
+                    patch("sys.argv", ["babanongchang", "games", "--nlgj", "--debug", "--dry-run"]),
+                    patch("babanongchang.adapters.adb_game.AdbGameDevice"),
+                    patch("babanongchang.nlgj.runner.play") as play,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    main()
+                    self.assertTrue(play.call_args.kwargs["record_events"])
+                    self.assertIsInstance(play.call_args.kwargs["log"], DebugLog)
+            finally:
+                os.chdir(previous)
 
     def test_invalid_selection_and_options_never_access_device(self):
         for options in (

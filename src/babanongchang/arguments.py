@@ -16,6 +16,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="运行模块：app（桌面界面，不接受其他参数）、all（默认）、fertilize、goods、tasks、taobao 或 games",
     )
     parser.add_argument("--serial", help="ADB 设备序列号；仅连接一台设备时可省略")
+    parser.add_argument("--debug", action="store_true", help="打印运行日志，并追加写入当前目录的 babanongchang.log")
     parser.add_argument("--nlgj", action="store_true", help="games 模块：挪了个箭，默认最多通关 3 次或运行 15 分钟")
     add_arguments(parser)
     defaults = FarmOptions()

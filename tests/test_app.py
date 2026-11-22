@@ -62,7 +62,7 @@ class AppDispatchTest(unittest.TestCase):
         adb.assert_not_called()
 
     def test_app_rejects_every_other_argument(self) -> None:
-        for arguments in (["app", "--threshold", "100"], ["app", "--help"], ["--serial", "x", "app"]):
+        for arguments in (["app", "--threshold", "100"], ["app", "--help"], ["app", "--debug"], ["--serial", "x", "app"]):
             with self.subTest(arguments=arguments), self.assertRaises(SystemExit):
                 main(arguments)
 
@@ -104,6 +104,10 @@ class AppArgumentTest(unittest.TestCase):
         self.assertEqual(
             build_arguments("nlgj", defaults_for(FEATURE_BY_KEY["nlgj"]), "phone"),
             ["games", "--nlgj", "--serial", "phone"],
+        )
+        self.assertEqual(
+            build_arguments("fertilize", values, "phone", log=True),
+            ["fertilize", "--serial", "phone", "--threshold", "900", "--max-clicks", "2", "--debug"],
         )
 
     def test_game_requires_device_even_when_only_inspecting(self) -> None:
@@ -151,6 +155,21 @@ class OcrConfigWritingTest(unittest.TestCase):
             self.assertIn("value = 7", text)
             self.assertIn("screenshot_interval_ms = 250", text)
             self.assertFalse(path.with_suffix(".toml.tmp").exists())
+
+    def test_log_switch_defaults_off_and_preserves_other_settings(self) -> None:
+        from babanongchang.app_core import load_log_enabled, save_log_enabled
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "babanongchang.toml"
+            self.assertFalse(load_log_enabled(path))
+            path.write_text("# keep\n[ocr]\nscreenshot_interval_ms = 250\n", encoding="utf-8")
+            save_log_enabled(path, True)
+            text = path.read_text(encoding="utf-8")
+            self.assertIn("[ocr]", text)
+            self.assertIn("screenshot_interval_ms = 250", text)
+            self.assertTrue(load_log_enabled(path))
+            save_log_enabled(path, False)
+            self.assertFalse(load_log_enabled(path))
 
 
 class DesktopCancellationTest(unittest.TestCase):

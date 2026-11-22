@@ -6,6 +6,7 @@ from typing import Protocol, Sequence
 
 from babanongchang.automation.browsing import find_browse_iteration
 from babanongchang.farm.alipay.task_pool import TaskDefinition, TaskOperation
+from babanongchang.logs import silent_log
 
 
 class TaskExecutionContext(Protocol):
@@ -27,7 +28,7 @@ class TaskExecutor(Protocol):
         task: TaskDefinition,
         button: tuple[int, int],
         *, sleep: Callable[[float], None] = system_sleep,
-        log: Callable[[str], None] = print,
+        log: Callable[[str], None] = silent_log,
     ) -> None: ...
 
 
@@ -38,7 +39,7 @@ class SwipeBrowseExecutor:
         task: TaskDefinition,
         button: tuple[int, int],
         *, sleep: Callable[[float], None] = system_sleep,
-        log: Callable[[str], None] = print,
+        log: Callable[[str], None] = silent_log,
     ) -> None:
         context.tap_task_button(button)
         context.wait_for_task_page()
@@ -57,7 +58,7 @@ class ClickAndReturnExecutor:
         task: TaskDefinition,
         button: tuple[int, int],
         *, sleep: Callable[[float], None] = system_sleep,
-        log: Callable[[str], None] = print,
+        log: Callable[[str], None] = silent_log,
     ) -> None:
         context.tap_task_button(button)
         context.wait_for_task_list_departure()

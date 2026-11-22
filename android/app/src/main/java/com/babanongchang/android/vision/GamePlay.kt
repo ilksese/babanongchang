@@ -178,9 +178,16 @@ private fun fastSequence(board: Board): List<Triple<Int, Int, Int>> {
     return sequence
 }
 
-fun playGame(options: GameOptions, device: ArrowDevice, reader: NativeGameReader, clock: Clock, log: (String) -> Unit) {
+fun playGame(
+    options: GameOptions,
+    device: ArrowDevice,
+    reader: NativeGameReader,
+    clock: Clock,
+    log: (String) -> Unit,
+    recordEvents: Boolean = false,
+) {
     options.output.mkdirs()
-    val events = File(options.output, "events.jsonl").bufferedWriter()
+    val events = if (recordEvents) File(options.output, "events.jsonl").bufferedWriter() else null
     fun event(kind: String, fields: Map<String, Any?> = emptyMap()) {
         val entry = JSONObject()
         entry.put("time", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss")))
@@ -188,7 +195,7 @@ fun playGame(options: GameOptions, device: ArrowDevice, reader: NativeGameReader
         fields.forEach { (key, value) -> if (value != null) entry.put(key, value) }
         val line = entry.toString()
         log(line)
-        events.write(line); events.newLine(); events.flush()
+        events?.apply { write(line); newLine(); flush() }
     }
     event("start", mapOf("package" to device.packageName))
     val deadline = clock.monotonic() + options.maxMinutes * 60
@@ -531,7 +538,7 @@ fun playGame(options: GameOptions, device: ArrowDevice, reader: NativeGameReader
         adScroller?.stop()
         pendingMask?.release(); pendingAfter?.release(); previousMask?.release()
         if (previousShot != null && previousShot !== predicted?.image) previousShot!!.release()
-        events.close()
+        events?.close()
     }
 }
 

@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.RadioButton
 import android.widget.TextView
+import android.widget.Switch
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -117,6 +118,17 @@ class MainActivity : Activity() {
         endButton = button(current, "结束当前流程", FarmUi.ButtonStyle.DANGER) { FarmAccessibilityService.connected?.cliRun?.end() }
         text(current, "运行时保持屏幕解锁，请勿手动切换页面。音量上暂停、音量下结束，暂停后点击小白球继续。", 14f)
         button(layout, "运行记录") { startActivity(Intent(this, RunHistoryActivity::class.java)) }.also { FarmUi.arrow(it) }
+        layout.addView(Switch(this).apply {
+            text = "记录日志"
+            textSize = 16f
+            setTextColor(FarmUi.ink)
+            minimumHeight = FarmUi.dp(this@MainActivity, 56)
+            isChecked = preferences.getBoolean("log_enabled", false)
+            setOnCheckedChangeListener { _, checked ->
+                preferences.edit().putBoolean("log_enabled", checked).apply()
+            }
+        })
+        text(layout, "默认关闭。打开后，下次开始才保存运行记录和事件日志。", 14f)
         val advanced = FarmUi.card(this)
         advanced.visibility = android.view.View.GONE
         val toggle = button(layout, "高级设置与工具") {

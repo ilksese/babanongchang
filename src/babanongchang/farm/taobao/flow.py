@@ -7,6 +7,7 @@ from typing import Sequence
 
 from babanongchang.automation.browsing import swipe_browse
 from babanongchang.farm.device import FarmDevice
+from babanongchang.logs import silent_log
 from babanongchang.automation.handle import (
     AutomationError,
     OcrText,
@@ -166,7 +167,7 @@ class TaobaoAutomation:
     HOME_ACTIVITY = "com.taobao.taobao/com.taobao.tao.welcome.Welcome"
 
     def __init__(
-        self, device: FarmDevice, screen: TextHandle, *, log: Callable[[str], None] = print,
+        self, device: FarmDevice, screen: TextHandle, *, log: Callable[[str], None] = silent_log,
     ) -> None:
         self.adb = device
         self.screen = screen

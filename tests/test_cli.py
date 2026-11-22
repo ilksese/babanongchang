@@ -1,4 +1,5 @@
 from subprocess import CompletedProcess
+from pathlib import Path
 import unittest
 from unittest.mock import ANY, Mock, call, patch
 
@@ -7,6 +8,7 @@ import numpy as np
 from babanongchang.adapters.adb import Adb
 from babanongchang.automation.handle import AutomationError, OcrText, ScreenSnapshot, TextHandle, WaitTimeoutError
 from babanongchang.cli import build_parser, main
+from babanongchang.logs import LOG_FILE_NAME, silent_log
 from babanongchang.config import ProjectConfig
 from babanongchang.farm.alipay.flow import (
     ALIPAY_HOME_ACTIVITY, ALIPAY_PACKAGE, AlipayAutomation, TaskAutomation,
@@ -595,8 +597,41 @@ class CliDispatchTest(unittest.TestCase):
             workflow.assert_called_once_with(
                 "all", FarmOptions(900, 21, 2), device=adb.return_value, ocr=ANY,
                 config=ANY, clock=adb.call_args.kwargs["clock"],
+                log=silent_log,
             )
             adb.return_value.allow_screen_sleep.assert_called_once_with()
+
+    def test_debug_prints_and_appends_log_without_debug_staying_silent(self) -> None:
+        import contextlib
+        import io
+        import os
+        import tempfile
+
+        def emit(*_args, **kwargs) -> None:
+            kwargs["log"]("hello")
+
+        for debug in (False, True):
+            with self.subTest(debug=debug), tempfile.TemporaryDirectory() as directory:
+                argv = ["babanongchang", "--debug"] if debug else ["babanongchang"]
+                with (
+                    patch("sys.argv", argv),
+                    patch("babanongchang.cli.Adb"),
+                    patch("babanongchang.cli.run_farm", side_effect=emit),
+                    contextlib.redirect_stdout(io.StringIO()) as stdout,
+                ):
+                    previous = os.getcwd()
+                    os.chdir(directory)
+                    try:
+                        main()
+                    finally:
+                        os.chdir(previous)
+                log_path = Path(directory) / LOG_FILE_NAME
+                if debug:
+                    self.assertIn("hello", log_path.read_text(encoding="utf-8"))
+                    self.assertIn("hello", stdout.getvalue())
+                else:
+                    self.assertFalse(log_path.exists())
+                    self.assertEqual(stdout.getvalue(), "")
 
     def test_stops_safely_and_restores_screen_sleep_when_workflow_fails(self) -> None:
         with (

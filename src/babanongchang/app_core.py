@@ -137,6 +137,7 @@ def build_arguments(
     feature_key: str,
     values: Mapping[str, str | bool],
     serial: str | None,
+    log: bool = False,
 ) -> list[str]:
     errors = validate_settings(feature_key, values)
     if errors:
@@ -162,6 +163,8 @@ def build_arguments(
                 args.append(flag)
         elif str(value).strip() and str(value) != str(field.default):
             args.extend((flag, str(value)))
+    if log:
+        args.append("--debug")
     return args
 
 
@@ -453,7 +456,10 @@ class DeviceBoard:
         run.status_title = "正在停止"
         run.status_detail = "已请求安全停止；正在等待当前设备操作结束…"
 
-    def finish(self, serial: str, *, code: int, stopped: bool, forced: bool) -> None:
+    def finish(
+        self, serial: str, *, code: int, stopped: bool, forced: bool,
+        logged: bool = True, note: str = "",
+    ) -> None:
         progress = self.progress.get(serial)
         if progress is not None and not progress.stopped:
             progress.stopped = True
@@ -462,9 +468,12 @@ class DeviceBoard:
         elif stopped:
             title, detail = "已由用户停止", "任务已完成清理"
         elif code == 0:
-            title, detail = "已完成", "流程正常结束；业务结果请以日志为准"
+            title = "已完成"
+            detail = "流程正常结束；业务结果请以日志为准" if logged else "流程正常结束"
         else:
             title, detail = "运行失败", f"子进程退出码：{code}"
+        if note and not logged:
+            detail = f"{detail}；{note}"
         if progress is not None and progress.level is not None and not _goal_reached(progress):
             stuck = f"停在第 {progress.level} 关"
             if _timeout_reason(progress.stop_reason):
@@ -548,6 +557,37 @@ def save_ocr_config(path: Path, screenshot_interval_ms: int, recognition_timeout
         document["ocr"] = tomlkit.table()
     document["ocr"]["screenshot_interval_ms"] = screenshot_interval_ms
     document["ocr"]["recognition_timeout_ms"] = recognition_timeout_ms
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(tomlkit.dumps(document), encoding="utf-8")
+    temporary.replace(path)
+
+
+def load_log_enabled(path: Path | None = None) -> bool:
+    from babanongchang.config import CONFIG_FILE_NAME
+
+    config_path = path or Path.cwd() / CONFIG_FILE_NAME
+    if not config_path.is_file():
+        return False
+    try:
+        import tomllib
+    except ModuleNotFoundError:
+        import tomli as tomllib
+    try:
+        with config_path.open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    app = data.get("app", {})
+    return isinstance(app, dict) and app.get("log") is True
+
+
+def save_log_enabled(path: Path, enabled: bool) -> None:
+    import tomlkit
+
+    document = tomlkit.parse(path.read_text(encoding="utf-8")) if path.exists() else tomlkit.document()
+    if "app" not in document:
+        document["app"] = tomlkit.table()
+    document["app"]["log"] = bool(enabled)
     temporary = path.with_suffix(path.suffix + ".tmp")
     temporary.write_text(tomlkit.dumps(document), encoding="utf-8")
     temporary.replace(path)

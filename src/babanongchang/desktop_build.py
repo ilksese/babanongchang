@@ -197,5 +197,5 @@ def main(argv: Sequence[str] | None = None) -> None:
     except OSError as exc:
         print(f"已生成单文件，但未能清掉旧的打包目录：{exc}")
     print(f"可分发文件：{output}")
-    print("把这一个 exe 交给对方即可运行。配置和日志写在 exe 同目录。")
+    print("把这一个 exe 交给对方即可运行。配置写在 exe 同目录。只有日志开关或 --debug 才会把日志追加到同目录的 babanongchang.log。")
     print("build 不是发布目录，只是打包中间缓存；成功后会清掉。")

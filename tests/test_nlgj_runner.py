@@ -12,7 +12,7 @@ from babanongchang.nlgj.options import GameOptions
 
 
 class TargetPriorityTest(unittest.TestCase):
-    def run_game(self, target, max_minutes=15):
+    def run_game(self, target, max_minutes=15, record_events=True):
         image = np.zeros((100, 100, 3), np.uint8)
         device = Mock(package="game")
         device.screenshot.side_effect = [image, image, image, RuntimeError("continued")]
@@ -46,10 +46,19 @@ class TargetPriorityTest(unittest.TestCase):
             clock.monotonic.side_effect = range(0, 10000, 61)
             error = None
             try:
-                runner.play(options, device=device, reader=reader, clock=clock)
+                runner.play(
+                    options, device=device, reader=reader, clock=clock,
+                    record_events=record_events,
+                )
             except RuntimeError as exc:
                 error = str(exc)
-            return error, (Path(output) / "events.jsonl").read_text()
+            log_path = Path(output) / "events.jsonl"
+            return error, log_path.read_text() if log_path.is_file() else ""
+
+    def test_does_not_write_event_log_unless_requested(self):
+        error, log = self.run_game(target=None, record_events=False)
+        self.assertIsNone(error)
+        self.assertEqual(log, "")
 
     def test_target_ignores_win_limit(self):
         error, log = self.run_game(target=293)

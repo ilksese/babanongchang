@@ -22,9 +22,12 @@ from babanongchang.app_core import (
     nlgj_progress_from_values,
     progress_ratio,
     progress_text,
+    load_log_enabled,
+    save_log_enabled,
     save_ocr_config,
     validate_settings,
 )
+from babanongchang.logs import LOG_FILE_NAME
 from babanongchang.config import CONFIG_FILE_NAME, load_project_config
 
 
@@ -70,6 +73,9 @@ class FarmApp:
         self.close_after_stop = False
         self.show_advanced = False
         self.parameter_controls: list[tuple[object, str]] = []
+        self.log_enabled = load_log_enabled(self.cwd / CONFIG_FILE_NAME)
+        self.run_logging: dict[str, bool] = {}
+        self.failure_notes: dict[str, str] = {}
         self._discovering = False
         self._rendering_devices = False
         self._device_poll_ms = 3000
@@ -97,6 +103,7 @@ class FarmApp:
         style.configure("Panel.TFrame", background=self.PANEL)
         style.configure("TLabel", background=self.BG, foreground=self.INK)
         style.configure("Panel.TLabel", background=self.PANEL, foreground=self.INK)
+        style.configure("Panel.TCheckbutton", background=self.PANEL, foreground=self.INK)
         style.configure("Title.TLabel", font=("Microsoft YaHei UI", 22, "bold"), background=self.GREEN_DARK, foreground="white")
         style.configure("Subtitle.TLabel", background=self.GREEN_DARK, foreground="#D8E9E1")
         style.configure("Feature.TButton", anchor="w", padding=(14, 11), background=self.PANEL, borderwidth=0)
@@ -227,7 +234,7 @@ class FarmApp:
         log_panel = ttk.Frame(work, style="Panel.TFrame", padding=(14, 10))
         log_panel.grid(row=3, column=0, sticky="nsew")
         log_panel.columnconfigure(0, weight=1)
-        log_panel.rowconfigure(2, weight=1)
+        log_panel.rowconfigure(3, weight=1)
         self.progress_frame = ttk.Frame(log_panel, style="Panel.TFrame")
         self.progress_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         self.progress_frame.columnconfigure(0, weight=1)
@@ -236,13 +243,27 @@ class FarmApp:
         self.progress_bar = ttk.Progressbar(self.progress_frame, style="Game.Horizontal.TProgressbar", mode="determinate")
         self.progress_bar.grid(row=1, column=0, sticky="ew", pady=(6, 0))
         self.progress_frame.grid_remove()
-        self.log_title = ttk.Label(log_panel, text="本次运行日志", style="Panel.TLabel", font=("Microsoft YaHei UI", 11, "bold"))
-        self.log_title.grid(row=1, column=0, sticky="w", pady=(0, 7))
-        ttk.Button(log_panel, text="复制日志", command=self._copy_log).grid(row=1, column=1, sticky="e")
+        log_header = ttk.Frame(log_panel, style="Panel.TFrame")
+        log_header.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 7))
+        log_header.columnconfigure(0, weight=1)
+        self.log_title = ttk.Label(log_header, text="本次运行日志", style="Panel.TLabel", font=("Microsoft YaHei UI", 11, "bold"))
+        self.log_title.grid(row=0, column=0, sticky="w")
+        self.log_switch = tk.BooleanVar(value=self.log_enabled)
+        ttk.Checkbutton(
+            log_header, text="记录日志", style="Panel.TCheckbutton",
+            variable=self.log_switch, command=self._toggle_log,
+        ).grid(row=0, column=1, sticky="e", padx=(12, 8))
+        ttk.Button(log_header, text="复制日志", command=self._copy_log).grid(row=0, column=2, sticky="e")
+        ttk.Label(
+            log_panel,
+            text=f"默认关闭。打开后，下一次运行才在这里显示，并追加写入 {LOG_FILE_NAME}。",
+            style="Panel.TLabel",
+            foreground=self.MUTED,
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(0, 7))
         self.log = tk.Text(log_panel, height=9, wrap="word", bg="#17251F", fg="#E7EFEA", insertbackground="white", relief="flat", padx=12, pady=10, font=("Consolas", 9), state="disabled")
-        self.log.grid(row=2, column=0, sticky="nsew")
+        self.log.grid(row=3, column=0, sticky="nsew")
         log_scroll = ttk.Scrollbar(log_panel, orient="vertical", command=self.log.yview)
-        log_scroll.grid(row=2, column=1, sticky="ns")
+        log_scroll.grid(row=3, column=1, sticky="ns")
         self.log.configure(yscrollcommand=log_scroll.set)
 
     def _select_feature(self, key: str) -> None:
@@ -390,6 +411,18 @@ class FarmApp:
         self.start_button.configure(state="normal" if self.board.can_start() else "disabled")
         self.stop_button.configure(state="normal" if self.board.can_stop() else "disabled")
 
+    def _toggle_log(self) -> None:
+        enabled = bool(self.log_switch.get())
+        try:
+            save_log_enabled(self.cwd / CONFIG_FILE_NAME, enabled)
+        except Exception as exc:
+            from tkinter import messagebox
+
+            self.log_switch.set(self.log_enabled)
+            messagebox.showerror("无法保存日志开关", str(exc))
+            return
+        self.log_enabled = enabled
+
     def _confirm_start(self) -> None:
         from tkinter import messagebox
         self._collect_values()
@@ -408,7 +441,7 @@ class FarmApp:
             messagebox.showerror("无法开始", conflict)
             return
         try:
-            arguments = build_arguments(self.feature_key, values, serial)
+            arguments = build_arguments(self.feature_key, values, serial, log=self.log_enabled)
         except ValueError as exc:
             messagebox.showerror("无法开始", str(exc))
             return
@@ -417,7 +450,11 @@ class FarmApp:
         parameter_text = " ".join(arguments)
         effective = effective_parameters(self.feature_key, values)
         effective_text = "\n".join(f"{label}：{value}" for label, value in effective) or "（无额外参数）"
-        if not messagebox.askyesno("确认开始作业", f"功能：{feature.title}\n{target}\n\n本次有效参数：\n{effective_text}\n\n确认开始？"):
+        log_line = "日志：开启" if self.log_enabled else "日志：关闭"
+        if not messagebox.askyesno(
+            "确认开始作业",
+            f"功能：{feature.title}\n{target}\n\n本次有效参数：\n{effective_text}\n\n{log_line}\n\n确认开始？",
+        ):
             return
         if self.feature_key == "nlgj" and output and Path(output).exists() and any(Path(output).iterdir()):
             if not messagebox.askyesno("输出目录已有文件", "现有文件可能被覆盖或与本次结果混合。继续运行？"):
@@ -433,11 +470,14 @@ class FarmApp:
         runner = TaskProcess(source)
         runner.start(arguments, self.cwd)
         feature = FEATURE_BY_KEY[self.feature_key]
-        progress = nlgj_progress_from_values(self.session_values[self.feature_key]) if self.feature_key == "nlgj" else None
+        logging_on = "--debug" in arguments
+        self.run_logging[serial] = logging_on
+        progress = nlgj_progress_from_values(self.session_values[self.feature_key]) if self.feature_key == "nlgj" and logging_on else None
         self.runners[serial] = runner
         self.forced.discard(serial)
         self.board.begin(serial, self.feature_key, feature.title, output, progress)
-        self.board.append_log(serial, command)
+        if logging_on:
+            self.board.append_log(serial, command)
         threading.Thread(target=self._bridge, args=(serial, source), name=f"app-cli-{serial}", daemon=True).start()
         self._render_devices()
         self._show_selected_log()
@@ -500,6 +540,11 @@ class FarmApp:
                 if kind == "log":
                     serial, text = payload
                     text = str(text)
+                    if not self.run_logging.get(serial, False):
+                        stripped = text.strip()
+                        if stripped:
+                            self.failure_notes[serial] = stripped.splitlines()[-1]
+                        continue
                     changed = self.board.append_log(serial, text)
                     if self.board.selected == serial:
                         self._insert_log(text)
@@ -532,7 +577,9 @@ class FarmApp:
         forced = serial in self.forced
         self.forced.discard(serial)
         self.runners.pop(serial, None)
-        self.board.finish(serial, code=code, stopped=stopped, forced=forced)
+        logged = self.run_logging.pop(serial, False)
+        note = self.failure_notes.pop(serial, "")
+        self.board.finish(serial, code=code, stopped=stopped, forced=forced, logged=logged, note=note)
         self._render_devices()
         if self.board.selected in (serial, None):
             self._show_selected_log()

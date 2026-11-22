@@ -137,7 +137,16 @@ class AndroidEntryTest(unittest.TestCase):
                     bridge = Mock()
                     android.run(bridge, module, "--threshold 700 --max-clicks 2", output)
                     self.assertEqual(run.call_args.args[0], module)
-                    bridge.log.assert_called_once_with(f"{module}\n")
+                    bridge.log.assert_not_called()
+
+    def test_debug_records_log_through_bridge(self):
+        def observe(module, options, **kwargs):
+            kwargs["log"](module)
+
+        with tempfile.TemporaryDirectory() as output, patch.object(android, "run_farm", side_effect=observe):
+            bridge = Mock()
+            android.run(bridge, "fertilize", "--debug", output)
+        bridge.log.assert_called_once_with("fertilize\n")
 
     def test_closes_native_ocr_on_failure(self):
         with (
@@ -165,6 +174,7 @@ class AndroidEntryTest(unittest.TestCase):
         self.assertEqual(play.call_args.args[0].output, Path(output).resolve())
         self.assertIsInstance(play.call_args.kwargs["device"], AndroidGameDevice)
         self.assertIsInstance(play.call_args.kwargs["reader"], AndroidScreenReader)
+        self.assertFalse(play.call_args.kwargs["record_events"])
 
 
 class AndroidRuntimeTest(unittest.TestCase):

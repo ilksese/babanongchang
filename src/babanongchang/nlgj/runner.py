@@ -20,22 +20,25 @@ from babanongchang.nlgj.overlay import dark_board, tap_point
 from babanongchang.nlgj.popups import AD_SCROLL_SECONDS, AdWait, popup_action, revive_action, streak_action
 from babanongchang.nlgj.recognition import annotate, predict_removal, recognize, report
 from babanongchang.nlgj.verification import arrow_has_left, heart_count, heart_lost, white_board_background
+from babanongchang.logs import silent_log
 
 
 def play(
     options: GameOptions, *, device: GameDevice, reader: GameReader,
-    clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = print,
+    clock: Clock = SYSTEM_CLOCK, log: Callable[[str], None] = silent_log,
+    record_events: bool = False,
 ) -> None:
     out = options.output
     out.mkdir(parents=True, exist_ok=True)
     deadline = clock.monotonic() + options.max_minutes * 60
-    events = (out / "events.jsonl").open("a", buffering=1)
+    events = (out / "events.jsonl").open("a", buffering=1) if record_events else None
 
     def event(kind: str, **data: object) -> None:
         entry = {"time": strftime("%Y-%m-%dT%H:%M:%S"), "event": kind, **data}
         line = json.dumps(entry, ensure_ascii=False)
         log(line)
-        events.write(line + "\n")
+        if events is not None:
+            events.write(line + "\n")
 
     event("start", package=device.package)
     completed = 0
@@ -371,4 +374,5 @@ def play(
     finally:
         if ad_scroller is not None:
             ad_scroller.stop()
-        events.close()
+        if events is not None:
+            events.close()
