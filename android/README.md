@@ -50,9 +50,7 @@ APK（含旧单次施肥入口）在 Kotlin 中实现 RapidOCR 3.10.0 的图像�
 
 Android 通过 ONNX Runtime Android 1.24.3 的 CPU 接口执行张量推理，OpenCV 4.12 做缩放、轮廓和透视裁剪。文字框扩张使用与桌面 pyclipper 相同的 Clipper 6.4.2 原始源码。现有置信度过滤与淘宝滑动条继续有效，识别引擎默认也会过滤低于 0.5 的结果，因此滑动条低于 0.5 不会恢复已被引擎过滤的文字。
 
-构建任务 `prepareOcr` 通过仓库锁定的 uv 环境准备桌面 CLI 的三份模型，复制到 APK 资源 `ocr/` 并生成 SHA-256 清单 `ocr/manifest.json`。首次构建可能下载模型；运行时只使用包内模型，不下载模型，不需要网络。修改 RapidOCR 版本后，应重新生成对照图片的 CLI 期望结果并执行模拟器测试。
-
-`src/androidTest/assets/ocr.png` 为合成中文截图，`ocr.json` 为 CLI 实际输出。仪器测试验证 APK 无网络权限、五行文字一致、框坐标误差不超过 2 像素、置信度误差不超过 0.02。跨平台 OpenCV／ONNX Runtime 版本不同，不承诺任意截图的结果逐位相同。
+构建任务 `prepareOcr` 通过仓库锁定的 uv 环境准备桌面 CLI 的三份模型，复制到 APK 资源 `ocr/` 并生成 SHA-256 清单 `ocr/manifest.json`。首次构建可能下载模型；运行时只使用包内模型，不下载模型，不需要网络。跨平台 OpenCV／ONNX Runtime 版本不同，不承诺任意截图的结果逐位相同。
 
 ## 构建与验证
 
@@ -60,20 +58,15 @@ Android 通过 ONNX Runtime Android 1.24.3 的 CPU 接口执行张量推理，Op
 
 ```sh
 cd android
-./gradlew testDebugUnitTest assembleDebug lintDebug
-# 已启动 Android 模拟器时，运行本机离线 OCR 与 CLI 截图对照（不操作支付宝／淘宝）
-./gradlew connectedDebugAndroidTest
+./gradlew assembleDebug lintDebug
 ```
 
 产物：`app/build/outputs/apk/debug/app-debug.apk`。支持 Android 11+ 的 arm64-v8a／x86_64；不支持 32 位设备。APK 不包含 Python。桌面 CLI 仍由 uv 管理 Python 3.14。
 
-桌面回归测试不需要手机，不会唤醒或操作设备：
+无设备冒烟不会唤醒或操作设备：
 
 ```sh
-uv run python -m unittest discover -s tests
 uv run babanongchang --help
 ```
-
-Android 单元测试覆盖暂停时间、旧页面坐标失效、暂停后结束、长等待取消，以及原生农场选项解析和施肥停止条件。仪器测试直接在 Android 上加载包内模型，对照桌面 CLI 的图片识别输出。
 
 **验收限制：** 本轮构建与本地测试不等于实体手机验收。支付宝／淘宝真实页面、完整游戏流程、音量键可靠接收与拦截、厂商无障碍兼容性仍需真机验证。旧版单次施肥模拟器记录不能作为本版全套流程通过的证据。连续流程沿用原有消费与重试规则；请在连续施肥设置页限制最多施肥次数，控制首次实际运行范围。

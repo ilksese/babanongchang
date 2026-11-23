@@ -8,9 +8,8 @@
 # 开发与验证
 
 - Python 环境由 `uv` 锁定为 3.14.x。首次安装依赖：`uv sync`。
-- 全量测试：`uv run python -m unittest discover -s tests`。单项测试用 dotted ID，例如 `uv run python -m unittest tests.test_config.LoadProjectConfigTest.test_uses_defaults_when_file_is_missing`。
-- 测试使用 fake ADB/OCR，不需要手机。`uv run babanongchang ...` 会唤醒设备并真实操作支付宝或淘宝；仅在用户明确要求且设备已连接、授权、解锁时运行。无设备冒烟：`uv run babanongchang --help`。
-- Android 验证在 `android/` 执行 `./gradlew testDebugUnitTest assembleDebug lintDebug`。`connectedDebugAndroidTest` 需要已启动的模拟器，只对照离线 OCR，不操作支付宝或淘宝。构建依赖 JDK 17、Android SDK 36，以及 `prepareOcr` 通过 `uv` 准备的模型。
+- 无设备冒烟：`uv run babanongchang --help`。`uv run babanongchang ...` 会唤醒设备并真实操作支付宝或淘宝；仅在用户明确要求且设备已连接、授权、解锁时运行。
+- Android 验证在 `android/` 执行 `./gradlew assembleDebug lintDebug`。构建依赖 JDK 17、Android SDK 36，以及 `prepareOcr` 通过 `uv` 准备的模型。
 
 # 代码边界
 
@@ -23,17 +22,3 @@
 - OCR 配置每次运行时读取：CLI 从工作目录加载 `babanongchang.toml`，APK 从应用私有目录 `files/cli-output/babanongchang.toml` 加载。业务流程使用传入的时钟等待，以保留 Android 暂停时间与桌面取消语义。
 - `babanongchang.toml`、`TextHandle` 和 `back_until` 的 timeout/interval 单位是毫秒。业务自动化方法的 `timeout`、`duration_seconds` 通常是秒，传给底层等待前要乘以 1000。
 - 各模块默认不打印、不写运行日志。CLI 只在 `--debug` 时打印并追加当前目录的 `babanongchang.log`；桌面和 APK 用“记录日志”开关控制，默认关闭，下次运行生效。挪了个箭的诊断截图和报告仍按输出目录保存，事件日志跟随上述开关。
-
-## Agent skills
-
-### Issue tracker
-
-创建、读取或更新规格与任务时，使用 GitHub Issues；规则见 `docs/agents/issue-tracker.md`。
-
-### Triage labels
-
-分类或更新任务状态时，使用 `docs/agents/triage-labels.md` 中的五种标准标签。
-
-### Domain docs
-
-讨论领域概念、编写规格或修改代码前，按 `docs/agents/domain.md` 读取术语表和相关 ADR；采用单上下文布局。
